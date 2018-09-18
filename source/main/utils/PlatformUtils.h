@@ -1,50 +1,61 @@
 /*
-	This source file is part of Rigs of Rods
-	Copyright 2005-2012 Pierre-Michel Ricordel
-	Copyright 2007-2012 Thomas Fischer
-	Copyright 2013-2014 Petr Ohlidal
+    This source file is part of Rigs of Rods
+    Copyright 2005-2012 Pierre-Michel Ricordel
+    Copyright 2007-2012 Thomas Fischer
+    Copyright 2013-2018 Petr Ohlidal & contributors
 
-	For more information, see http://www.rigsofrods.com/
+    For more information, see http://www.rigsofrods.org/
 
-	Rigs of Rods is free software: you can redistribute it and/or modify
-	it under the terms of the GNU General Public License version 3, as
-	published by the Free Software Foundation.
+    Rigs of Rods is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License version 3, as
+    published by the Free Software Foundation.
 
-	Rigs of Rods is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY; without even the implied warranty of
-	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-	GNU General Public License for more details.
+    Rigs of Rods is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+    GNU General Public License for more details.
 
-	You should have received a copy of the GNU General Public License
-	along with Rigs of Rods. If not, see <http://www.gnu.org/licenses/>.
+    You should have received a copy of the GNU General Public License
+    along with Rigs of Rods. If not, see <http://www.gnu.org/licenses/>.
 */
 
-/** 
-	@file   PlatformUtils.h
-	@author Petr Ohlidal
-	@date   05/2014
-	@brief  Platform-specific utilities
-*/
+///  @file   PlatformUtils.h
+///  @author Petr Ohlidal
+///  @date   05/2014
+///  @brief  Platform-specific utilities
+///
+///  For filesystem operations, we use narrow UTF-8 encoded strings as paths.
+///  Inspired by manifesto http://utf8everywhere.org/
+///  Code based on https://github.com/only-a-ptr/filepaths4rigs
 
 #pragma once
 
-#include <OgrePlatform.h>
-#include <OgreString.h>
+#ifdef USE_CRASHRPT
+#   include "crashrpt.h" // see http://crashrpt.sourceforge.net/
+#endif
 
-namespace RoR
-{
+#include <string>
 
-struct PlatformUtils
-{
-	static const Ogre::String DIRECTORY_SEPARATOR;
+namespace RoR {
 
-	static bool FileExists(const char * path);
+extern char PATH_SLASH;
 
-	static bool FileExists(Ogre::String const & path);
+bool FileExists(const char* path);   //!< Path must be UTF-8 encoded.
+bool FolderExists(const char* path); //!< Path must be UTF-8 encoded.
+void CreateFolder(const char* path); //!< Path must be UTF-8 encoded.
 
-	static bool FolderExists(const char * path);
+inline bool FileExists(std::string const& path)   { return FileExists(path.c_str()); }
+inline bool FolderExists(std::string const& path) { return FolderExists(path.c_str()); }
+inline void CreateFolder(std::string const& path) { CreateFolder(path.c_str()); }
 
-	static bool FolderExists(Ogre::String const & path);
-};
+std::string GetUserHomeDirectory(); //!< Returns UTF-8 path or empty string on error
+std::string GetExecutablePath(); //!< Returns UTF-8 path or empty string on error
+std::string GetParentDirectory(const char* path); //!< Returns UTF-8 path without trailing slash.
+
+#ifdef USE_CRASHRPT
+int CALLBACK CrashRptCallback(CR_CRASH_CALLBACK_INFO* pInfo);
+void InstallCrashRpt();
+void UninstallCrashRpt();
+#endif
 
 } // namespace RoR

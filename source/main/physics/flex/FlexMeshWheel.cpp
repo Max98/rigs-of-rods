@@ -1,339 +1,258 @@
 /*
-	This source file is part of Rigs of Rods
-	Copyright 2005-2012 Pierre-Michel Ricordel
-	Copyright 2007-2012 Thomas Fischer
-	Copyright 2013-2015 Petr Ohlidal
+    This source file is part of Rigs of Rods
+    Copyright 2005-2012 Pierre-Michel Ricordel
+    Copyright 2007-2012 Thomas Fischer
+    Copyright 2013-2017 Petr Ohlidal & contributors
 
-	For more information, see http://www.rigsofrods.com/
+    For more information, see http://www.rigsofrods.org/
 
-	Rigs of Rods is free software: you can redistribute it and/or modify
-	it under the terms of the GNU General Public License version 3, as
-	published by the Free Software Foundation.
+    Rigs of Rods is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License version 3, as
+    published by the Free Software Foundation.
 
-	Rigs of Rods is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY; without even the implied warranty of
-	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-	GNU General Public License for more details.
+    Rigs of Rods is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+    GNU General Public License for more details.
 
-	You should have received a copy of the GNU General Public License
-	along with Rigs of Rods. If not, see <http://www.gnu.org/licenses/>.
+    You should have received a copy of the GNU General Public License
+    along with Rigs of Rods. If not, see <http://www.gnu.org/licenses/>.
 */
 
 #include "FlexMeshWheel.h"
 
-#include "MaterialReplacer.h"
-#include "ResourceBuffer.h"
-#include "Skin.h"
-#include "MaterialFunctionMapper.h"
 #include "BeamData.h"
 
-#include <sstream>
+#include <Ogre.h>
 
 using namespace Ogre;
 
 FlexMeshWheel::FlexMeshWheel(
-	Ogre::String const & name,
-	node_t *nds, 
-	int axis_node_1_index, 
-	int axis_node_2_index, 
-	int nstart, 
-	int nrays, 
-	Ogre::String const & mesh_name,
-	Ogre::String const & material_name,//char* texband, 
-	float rimradius, 
-	bool rimreverse, 
-	MaterialFunctionMapper *material_function_mapper, // *mfm
-	Skin *used_skin, // *usedSkin, 
-	MaterialReplacer *material_replacer // *mr
+    Ogre::Entity* rim_prop_entity,
+    node_t *nds, 
+    int axis_node_1_index, 
+    int axis_node_2_index, 
+    int nstart, 
+    int nrays, 
+    std::string const& tire_mesh_name,
+    std::string const& tire_material_name,
+    float rimradius, 
+    bool rimreverse
 ) :
-	  id0(axis_node_1_index)
-	, id1(axis_node_2_index)
-	, idstart(nstart)
-	, mr(material_replacer)
-	, nbrays(nrays)
-	, nodes(nds)
-	, revrim(rimreverse)
-	, rim_radius(rimradius)
+      m_axis_node0_idx(axis_node_1_index)
+    , m_axis_node1_idx(axis_node_2_index)
+    , m_start_node_idx(nstart)
+    , m_num_rays(static_cast<size_t>(nrays))
+    , m_all_nodes(nds)
+    , m_is_rim_reverse(rimreverse)
+    , m_rim_radius(rimradius)
 {
+    m_rim_entity = rim_prop_entity;
+    m_rim_scene_node=gEnv->sceneManager->getRootSceneNode()->createChildSceneNode();
+    m_rim_scene_node->attachObject(m_rim_entity);
 
-	//the rim object
-	std::stringstream rim_name;
-	rim_name << "rim-" << name;
-	rimEnt = gEnv->sceneManager->createEntity(rim_name.str(), mesh_name);
-	MaterialFunctionMapper::replaceSimpleMeshMaterials(rimEnt, ColourValue(0, 0.5, 0.8));
-	if (material_function_mapper != nullptr)
-	{
-		material_function_mapper->replaceMeshMaterials(rimEnt);
-	}
-	if (material_replacer != nullptr)
-	{
-		material_replacer->replaceMeshMaterials(rimEnt);
-	}
-	if (used_skin != nullptr)
-	{
-		used_skin->replaceMeshMaterials(rimEnt);
-	}
-	rnode=gEnv->sceneManager->getRootSceneNode()->createChildSceneNode();
-	rnode->attachObject(rimEnt);
+    // Create the tire mesh via the MeshManager
+    m_mesh = MeshManager::getSingleton().createManual(tire_mesh_name, ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
 
-	/// Create the mesh via the MeshManager
-	msh = MeshManager::getSingleton().createManual(name, ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,new ResourceBuffer());
+    // Create submeshes
+    m_submesh = m_mesh->createSubMesh();
 
-	/// Create submeshes
-	sub = msh->createSubMesh();
+    //materials
+    m_submesh->setMaterialName(tire_material_name);
 
-	//materials
-	sub->setMaterialName(material_name);
+    // Define the vertices
+    m_vertex_count = 6*(nrays+1);
+    m_vertices = new FlexMeshWheelVertex[m_vertex_count];
 
-	/// Define the vertices
-	nVertices = 6*(nrays+1);
-	vbufCount = (2*3+2)*nVertices;
-	vertices=(float*)malloc(vbufCount*sizeof(float));
-	//shadow
-	shadownorvertices=(float*)malloc(nVertices*(3+2)*sizeof(float));
-	shadowposvertices=(float*)malloc(nVertices*3*2*sizeof(float));
+    int i;
+    //textures coordinates
+    for (i=0; i<nrays+1; i++)
+    {
+        m_vertices[i*6   ].texcoord=Vector2((float)i/(float)nrays, 0.00f);
+        m_vertices[i*6+1 ].texcoord=Vector2((float)i/(float)nrays, 0.23f);
+        m_vertices[i*6+2 ].texcoord=Vector2((float)i/(float)nrays, 0.27f);
+        m_vertices[i*6+3 ].texcoord=Vector2((float)i/(float)nrays, 0.73f);
+        m_vertices[i*6+4 ].texcoord=Vector2((float)i/(float)nrays, 0.77f);
+        m_vertices[i*6+5 ].texcoord=Vector2((float)i/(float)nrays, 1.00f);
+    }
 
-	int i;
-	//textures coordinates
-	for (i=0; i<nrays+1; i++)
-	{
-		covertices[i*6   ].texcoord=Vector2((float)i/(float)nrays, 0.00f);
-		covertices[i*6+1 ].texcoord=Vector2((float)i/(float)nrays, 0.23f);
-		covertices[i*6+2 ].texcoord=Vector2((float)i/(float)nrays, 0.27f);
-		covertices[i*6+3 ].texcoord=Vector2((float)i/(float)nrays, 0.73f);
-		covertices[i*6+4 ].texcoord=Vector2((float)i/(float)nrays, 0.77f);
-		covertices[i*6+5 ].texcoord=Vector2((float)i/(float)nrays, 1.00f);
-	}
+    // Define triangles
+    // The values in this table refer to vertices in the above table
+    m_index_count = 3*10*nrays;
+    m_indices=(unsigned short*)malloc(m_index_count*sizeof(unsigned short));
+    for (i=0; i<nrays; i++)
+    {
+        m_indices[3*(i*10  )]=i*6;   m_indices[3*(i*10  )+1]=i*6+1;     m_indices[3*(i*10  )+2]=(i+1)*6;
+        m_indices[3*(i*10+1)]=i*6+1; m_indices[3*(i*10+1)+1]=(i+1)*6+1; m_indices[3*(i*10+1)+2]=(i+1)*6;
 
-	/// Define triangles
-	/// The values in this table refer to vertices in the above table
-	ibufCount = 3*10*nrays;
-	faces=(unsigned short*)malloc(ibufCount*sizeof(unsigned short));
-	for (i=0; i<nrays; i++)
-	{
-		faces[3*(i*10  )]=i*6;   faces[3*(i*10  )+1]=i*6+1;     faces[3*(i*10  )+2]=(i+1)*6;
-		faces[3*(i*10+1)]=i*6+1; faces[3*(i*10+1)+1]=(i+1)*6+1; faces[3*(i*10+1)+2]=(i+1)*6;
+        m_indices[3*(i*10+2)]=i*6+1; m_indices[3*(i*10+2)+1]=i*6+2;     m_indices[3*(i*10+2)+2]=(i+1)*6+1;
+        m_indices[3*(i*10+3)]=i*6+2; m_indices[3*(i*10+3)+1]=(i+1)*6+2; m_indices[3*(i*10+3)+2]=(i+1)*6+1;
 
-		faces[3*(i*10+2)]=i*6+1; faces[3*(i*10+2)+1]=i*6+2;     faces[3*(i*10+2)+2]=(i+1)*6+1;
-		faces[3*(i*10+3)]=i*6+2; faces[3*(i*10+3)+1]=(i+1)*6+2; faces[3*(i*10+3)+2]=(i+1)*6+1;
+        m_indices[3*(i*10+4)]=i*6+2; m_indices[3*(i*10+4)+1]=i*6+3;     m_indices[3*(i*10+4)+2]=(i+1)*6+2;
+        m_indices[3*(i*10+5)]=i*6+3; m_indices[3*(i*10+5)+1]=(i+1)*6+3; m_indices[3*(i*10+5)+2]=(i+1)*6+2;
 
-		faces[3*(i*10+4)]=i*6+2; faces[3*(i*10+4)+1]=i*6+3;     faces[3*(i*10+4)+2]=(i+1)*6+2;
-		faces[3*(i*10+5)]=i*6+3; faces[3*(i*10+5)+1]=(i+1)*6+3; faces[3*(i*10+5)+2]=(i+1)*6+2;
+        m_indices[3*(i*10+6)]=i*6+3; m_indices[3*(i*10+6)+1]=i*6+4;     m_indices[3*(i*10+6)+2]=(i+1)*6+3;
+        m_indices[3*(i*10+7)]=i*6+4; m_indices[3*(i*10+7)+1]=(i+1)*6+4; m_indices[3*(i*10+7)+2]=(i+1)*6+3;
 
-		faces[3*(i*10+6)]=i*6+3; faces[3*(i*10+6)+1]=i*6+4;     faces[3*(i*10+6)+2]=(i+1)*6+3;
-		faces[3*(i*10+7)]=i*6+4; faces[3*(i*10+7)+1]=(i+1)*6+4; faces[3*(i*10+7)+2]=(i+1)*6+3;
+        m_indices[3*(i*10+8)]=i*6+4; m_indices[3*(i*10+8)+1]=i*6+5;     m_indices[3*(i*10+8)+2]=(i+1)*6+4;
+        m_indices[3*(i*10+9)]=i*6+5; m_indices[3*(i*10+9)+1]=(i+1)*6+5; m_indices[3*(i*10+9)+2]=(i+1)*6+4;
+    }
 
-		faces[3*(i*10+8)]=i*6+4; faces[3*(i*10+8)+1]=i*6+5;     faces[3*(i*10+8)+2]=(i+1)*6+4;
-		faces[3*(i*10+9)]=i*6+5; faces[3*(i*10+9)+1]=(i+1)*6+5; faces[3*(i*10+9)+2]=(i+1)*6+4;
-	}
+    m_norm_y=1.0;
+    //update coords
+    updateVertices();
+    //compute m_norm_y;
+    m_norm_y=((m_vertices[0].position-m_vertices[1].position).crossProduct(m_vertices[1].position-m_vertices[6+1].position)).length();
+    //recompute for normals
+    updateVertices();
 
-	normy=1.0;
-	//update coords
-	updateVertices();
-	//compute normy;
-	normy=((covertices[0].vertex-covertices[1].vertex).crossProduct(covertices[1].vertex-covertices[6+1].vertex)).length();
-	//recompute for normals
-	updateVertices();
+    // Create position data structure for 8 vertices shared between submeshes
+    m_mesh->sharedVertexData = new VertexData();
+    m_mesh->sharedVertexData->vertexCount = m_vertex_count;
 
-	/// Create vertex data structure for 8 vertices shared between submeshes
-	msh->sharedVertexData = new VertexData();
-	msh->sharedVertexData->vertexCount = nVertices;
+    // Create declaration (memory format) of position data
+    m_vertex_format = m_mesh->sharedVertexData->vertexDeclaration;
+    size_t offset = 0;
+    m_vertex_format->addElement(0, offset, VET_FLOAT3, VES_POSITION);
+    offset += VertexElement::getTypeSize(VET_FLOAT3);
+    m_vertex_format->addElement(0, offset, VET_FLOAT3, VES_NORMAL);
+    offset += VertexElement::getTypeSize(VET_FLOAT3);
+    m_vertex_format->addElement(0, offset, VET_FLOAT2, VES_TEXTURE_COORDINATES, 0);
+    offset += VertexElement::getTypeSize(VET_FLOAT2);
 
-	/// Create declaration (memory format) of vertex data
-	decl = msh->sharedVertexData->vertexDeclaration;
-	size_t offset = 0;
-	decl->addElement(0, offset, VET_FLOAT3, VES_POSITION);
-	offset += VertexElement::getTypeSize(VET_FLOAT3);
-	decl->addElement(0, offset, VET_FLOAT3, VES_NORMAL);
-	offset += VertexElement::getTypeSize(VET_FLOAT3);
-//        decl->addElement(0, offset, VET_FLOAT3, VES_DIFFUSE);
-//        offset += VertexElement::getTypeSize(VET_FLOAT3);
-	decl->addElement(0, offset, VET_FLOAT2, VES_TEXTURE_COORDINATES, 0);
-	offset += VertexElement::getTypeSize(VET_FLOAT2);
+    // Allocate position buffer of the requested number of vertices (vertexCount)
+    // and bytes per position (offset)
+    m_hw_vbuf =
+      HardwareBufferManager::getSingleton().createVertexBuffer(
+          offset, m_mesh->sharedVertexData->vertexCount, HardwareBuffer::HBU_DYNAMIC_WRITE_ONLY_DISCARDABLE);
 
-	/// Allocate vertex buffer of the requested number of vertices (vertexCount)
-	/// and bytes per vertex (offset)
-	vbuf =
-	  HardwareBufferManager::getSingleton().createVertexBuffer(
-		  offset, msh->sharedVertexData->vertexCount, HardwareBuffer::HBU_DYNAMIC_WRITE_ONLY_DISCARDABLE);
+    // Upload the position data to the card
+    m_hw_vbuf->writeData(0, m_hw_vbuf->getSizeInBytes(), m_vertices, true);
 
-	/// Upload the vertex data to the card
-	vbuf->writeData(0, vbuf->getSizeInBytes(), vertices, true);
+    // Set position buffer binding so buffer 0 is bound to our position buffer
+    VertexBufferBinding* bind = m_mesh->sharedVertexData->vertexBufferBinding;
+    bind->setBinding(0, m_hw_vbuf);
 
-	/// Set vertex buffer binding so buffer 0 is bound to our vertex buffer
-	VertexBufferBinding* bind = msh->sharedVertexData->vertexBufferBinding;
-	bind->setBinding(0, vbuf);
+    //for the face
+    // Allocate index buffer of the requested number of vertices (m_index_count)
+    HardwareIndexBufferSharedPtr ibuf = HardwareBufferManager::getSingleton().
+     createIndexBuffer(
+         HardwareIndexBuffer::IT_16BIT,
+            m_index_count,
+            HardwareBuffer::HBU_STATIC_WRITE_ONLY);
 
-	//for the face
-	/// Allocate index buffer of the requested number of vertices (ibufCount)
-	HardwareIndexBufferSharedPtr ibuf = HardwareBufferManager::getSingleton().
-	 createIndexBuffer(
-		 HardwareIndexBuffer::IT_16BIT,
-			ibufCount,
-			HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+    // Upload the index data to the card
+    ibuf->writeData(0, ibuf->getSizeInBytes(), m_indices, true);
 
-	/// Upload the index data to the card
-	ibuf->writeData(0, ibuf->getSizeInBytes(), faces, true);
-
-	/// Set parameters of the submesh
-	sub->useSharedVertices = true;
-	sub->indexData->indexBuffer = ibuf;
-	sub->indexData->indexCount = ibufCount;
-	sub->indexData->indexStart = 0;
+    // Set parameters of the submesh
+    m_submesh->useSharedVertices = true;
+    m_submesh->indexData->indexBuffer = ibuf;
+    m_submesh->indexData->indexCount = m_index_count;
+    m_submesh->indexData->indexStart = 0;
 
 
-	/// Set bounding information (for culling)
-	msh->_setBounds(AxisAlignedBox(-1,-1,0,1,1,0), true);
-	//msh->_setBoundingSphereRadius(Math::Sqrt(1*1+1*1));
+    // Set bounding information (for culling)
+    m_mesh->_setBounds(AxisAlignedBox(-1,-1,0,1,1,0), true);
 
-	/// Notify Mesh object that it has been loaded
-	//msh->buildTangentVectors();
-	/*unsigned short src, dest;
-	if (!msh->suggestTangentVectorBuildParams(src, dest))
-	{
-		msh->buildTangentVectors(src, dest);
-	}
-	*/
+    m_mesh->load();
+}
 
-	msh->load();
-	//msh->touch();
-	//        msh->load();
+FlexMeshWheel::~FlexMeshWheel()
+{
+    if (m_vertices != nullptr) { delete m_vertices; }
+    if (m_indices != nullptr) { free (m_indices); }
 
-			//msh->buildEdgeList();
+    // Rim: we own both Entity and SceneNode
+    m_rim_scene_node->detachAllObjects();
+    gEnv->sceneManager->destroySceneNode(m_rim_scene_node);
+    gEnv->sceneManager->destroyEntity(m_rim_entity);
+    m_rim_entity = nullptr;
+
+    // Tyre: we own the Entity, SceneNode is owned by vwheel_t
+    m_tire_entity->detachFromParent();
+    gEnv->sceneManager->destroyEntity(m_tire_entity);
+    m_tire_entity = nullptr;
+
+    // Delete tyre mesh
+    m_mesh->unload();
+    Ogre::MeshManager::getSingleton().remove(m_mesh->getHandle());
+    m_mesh.setNull();
 }
 
 Vector3 FlexMeshWheel::updateVertices()
 {
-	Vector3 center = (nodes[id0].smoothpos + nodes[id1].smoothpos) / 2.0;
-	Vector3 ray = nodes[idstart].smoothpos - nodes[id0].smoothpos;
-	Vector3 axis = nodes[id0].smoothpos - nodes[id1].smoothpos;
+    Vector3 center = (m_all_nodes[m_axis_node0_idx].AbsPosition + m_all_nodes[m_axis_node1_idx].AbsPosition) / 2.0;
+    Vector3 ray = m_all_nodes[m_start_node_idx].AbsPosition - m_all_nodes[m_axis_node0_idx].AbsPosition;
+    Vector3 axis = m_all_nodes[m_axis_node0_idx].AbsPosition - m_all_nodes[m_axis_node1_idx].AbsPosition;
 
-	axis.normalise();
-	
-	for (int i=0; i<nbrays; i++)
-	{
-		Plane pl=Plane(axis, nodes[id0].smoothpos);
-		ray=nodes[idstart+i*2].smoothpos-nodes[id0].smoothpos;
-		ray=pl.projectVector(ray);
-		ray.normalise();
-		covertices[i*6  ].vertex=nodes[id0].smoothpos+rim_radius*ray-center;
+    axis.normalise();
+    
+    for (size_t i=0; i<m_num_rays; i++)
+    {
+        Plane pl=Plane(axis, m_all_nodes[m_axis_node0_idx].AbsPosition);
+        ray=m_all_nodes[m_start_node_idx+i*2].AbsPosition-m_all_nodes[m_axis_node0_idx].AbsPosition;
+        ray=pl.projectVector(ray);
+        ray.normalise();
+        m_vertices[i*6  ].position=m_all_nodes[m_axis_node0_idx].AbsPosition+m_rim_radius*ray-center;
 
-		covertices[i*6+1].vertex=nodes[idstart+i*2].smoothpos-0.05*(nodes[idstart+i*2].smoothpos-nodes[id0].smoothpos)-center;
-		covertices[i*6+2].vertex=nodes[idstart+i*2].smoothpos-0.1*(nodes[idstart+i*2].smoothpos-nodes[idstart+i*2+1].smoothpos)-center;
-		covertices[i*6+3].vertex=nodes[idstart+i*2+1].smoothpos-0.1*(nodes[idstart+i*2+1].smoothpos-nodes[idstart+i*2].smoothpos)-center;
-		covertices[i*6+4].vertex=nodes[idstart+i*2+1].smoothpos-0.05*(nodes[idstart+i*2+1].smoothpos-nodes[id1].smoothpos)-center;
+        m_vertices[i*6+1].position=m_all_nodes[m_start_node_idx+i*2].AbsPosition-0.05  *(m_all_nodes[m_start_node_idx+i*2].AbsPosition-m_all_nodes[m_axis_node0_idx].AbsPosition)-center;
+        m_vertices[i*6+2].position=m_all_nodes[m_start_node_idx+i*2].AbsPosition-0.1   *(m_all_nodes[m_start_node_idx+i*2].AbsPosition-m_all_nodes[m_start_node_idx+i*2+1].AbsPosition)-center;
+        m_vertices[i*6+3].position=m_all_nodes[m_start_node_idx+i*2+1].AbsPosition-0.1 *(m_all_nodes[m_start_node_idx+i*2+1].AbsPosition-m_all_nodes[m_start_node_idx+i*2].AbsPosition)-center;
+        m_vertices[i*6+4].position=m_all_nodes[m_start_node_idx+i*2+1].AbsPosition-0.05*(m_all_nodes[m_start_node_idx+i*2+1].AbsPosition-m_all_nodes[m_axis_node1_idx].AbsPosition)-center;
 
-		pl=Plane(-axis, nodes[id1].smoothpos);
-		ray=nodes[idstart+i*2+1].smoothpos-nodes[id1].smoothpos;
-		ray=pl.projectVector(ray);
-		ray.normalise();
-		covertices[i*6+5].vertex=nodes[id1].smoothpos+rim_radius*ray-center;
+        pl=Plane(-axis, m_all_nodes[m_axis_node1_idx].AbsPosition);
+        ray=m_all_nodes[m_start_node_idx+i*2+1].AbsPosition-m_all_nodes[m_axis_node1_idx].AbsPosition;
+        ray=pl.projectVector(ray);
+        ray.normalise();
+        m_vertices[i*6+5].position=m_all_nodes[m_axis_node1_idx].AbsPosition+m_rim_radius*ray-center;
 
-		//normals
-		covertices[i*6  ].normal=axis;
-		covertices[i*6+1].normal=(covertices[i*6].vertex-covertices[i*6+1].vertex).crossProduct(covertices[i*6].vertex-covertices[((i+1)%nbrays)*6+1].vertex)/normy;
-		covertices[i*6+2].normal=ray;
-		covertices[i*6+3].normal=ray;
-		covertices[i*6+4].normal=(covertices[i*6+4].vertex-covertices[i*6+5].vertex).crossProduct(covertices[i*6+4].vertex-covertices[((i+1)%nbrays)*6+4].vertex)/normy;
-		covertices[i*6+5].normal=-axis;
-	}
-	for (int i=0; i<6; i++)
-	{
-		covertices[nbrays*6+i].vertex=covertices[i].vertex;
-		covertices[nbrays*6+i].normal=covertices[i].normal;
-	}
+        //normals
+        m_vertices[i*6  ].normal=axis;
+        m_vertices[i*6+1].normal=(m_vertices[i*6].position-m_vertices[i*6+1].position).crossProduct(m_vertices[i*6].position-m_vertices[((i+1)%m_num_rays)*6+1].position)/m_norm_y;
+        m_vertices[i*6+2].normal=ray;
+        m_vertices[i*6+3].normal=ray;
+        m_vertices[i*6+4].normal=(m_vertices[i*6+4].position-m_vertices[i*6+5].position).crossProduct(m_vertices[i*6+4].position-m_vertices[((i+1)%m_num_rays)*6+4].position)/m_norm_y;
+        m_vertices[i*6+5].normal=-axis;
+    }
+    for (int i=0; i<6; i++)
+    {
+        m_vertices[m_num_rays*6+i].position=m_vertices[i].position;
+        m_vertices[m_num_rays*6+i].normal=m_vertices[i].normal;
+    }
 
-	return center;
-}
-
-Vector3 FlexMeshWheel::updateShadowVertices()
-{
-	Vector3 center = (nodes[id0].smoothpos + nodes[id1].smoothpos) / 2.0;
-	Vector3 ray = nodes[idstart].smoothpos - nodes[id0].smoothpos;
-	Vector3 axis = nodes[id0].smoothpos - nodes[id1].smoothpos;
-	
-	axis.normalise();
-
-	for (int i=0; i<nbrays; i++)
-	{
-		Plane pl=Plane(axis, nodes[id0].smoothpos);
-		ray=nodes[idstart+i*2].smoothpos-nodes[id0].smoothpos;
-		ray=pl.projectVector(ray);
-		ray.normalise();
-		coshadowposvertices[i*6  ].vertex=nodes[id0].smoothpos+rim_radius*ray-center;
-
-		coshadowposvertices[i*6+1].vertex=nodes[idstart+i*2].smoothpos-0.05*(nodes[idstart+i*2].smoothpos-nodes[id0].smoothpos)-center;
-		coshadowposvertices[i*6+2].vertex=nodes[idstart+i*2].smoothpos-0.1*(nodes[idstart+i*2].smoothpos-nodes[idstart+i*2+1].smoothpos)-center;
-		coshadowposvertices[i*6+3].vertex=nodes[idstart+i*2+1].smoothpos-0.1*(nodes[idstart+i*2+1].smoothpos-nodes[idstart+i*2].smoothpos)-center;
-		coshadowposvertices[i*6+4].vertex=nodes[idstart+i*2+1].smoothpos-0.05*(nodes[idstart+i*2+1].smoothpos-nodes[id1].smoothpos)-center;
-
-		pl=Plane(-axis, nodes[id1].smoothpos);
-		ray=nodes[idstart+i*2+1].smoothpos-nodes[id1].smoothpos;
-		ray=pl.projectVector(ray);
-		ray.normalise();
-		coshadowposvertices[i*6+5].vertex=nodes[id1].smoothpos+rim_radius*ray-center;
-
-		//normals
-		coshadownorvertices[i*6  ].normal=axis;
-		coshadownorvertices[i*6+1].normal=(coshadowposvertices[i*6].vertex-coshadowposvertices[i*6+1].vertex).crossProduct(coshadowposvertices[i*6].vertex-coshadowposvertices[((i+1)%nbrays)*6+1].vertex)/normy;
-		coshadownorvertices[i*6+2].normal=ray;
-		coshadownorvertices[i*6+3].normal=ray;
-		coshadownorvertices[i*6+4].normal=(coshadowposvertices[i*6+4].vertex-coshadowposvertices[i*6+5].vertex).crossProduct(coshadowposvertices[i*6+4].vertex-coshadowposvertices[((i+1)%nbrays)*6+4].vertex)/normy;
-		coshadownorvertices[i*6+5].normal=-axis;
-
-		coshadownorvertices[i*6  ].texcoord=covertices[i*6  ].texcoord;
-		coshadownorvertices[i*6+1].texcoord=covertices[i*6+1].texcoord;
-		coshadownorvertices[i*6+2].texcoord=covertices[i*6+2].texcoord;
-		coshadownorvertices[i*6+3].texcoord=covertices[i*6+3].texcoord;
-		coshadownorvertices[i*6+4].texcoord=covertices[i*6+4].texcoord;
-		coshadownorvertices[i*6+5].texcoord=covertices[i*6+5].texcoord;
-
-	}
-	for (int i=0; i<6; i++)
-	{
-		coshadowposvertices[nbrays*6+i].vertex=coshadowposvertices[i].vertex;
-		coshadownorvertices[nbrays*6+i].normal=coshadownorvertices[i].normal;
-		coshadownorvertices[nbrays*6+i].texcoord=coshadownorvertices[i].texcoord;
-	}
-
-	return center;
+    return center;
 }
 
 void FlexMeshWheel::setVisible(bool visible)
 {
-	if (rnode) rnode->setVisible(visible);
+    if (m_rim_scene_node) m_rim_scene_node->setVisible(visible);
 }
 
-bool FlexMeshWheel::flexitPrepare(Beam* b)
+bool FlexMeshWheel::flexitPrepare()
 {
-	Vector3 center = (nodes[id0].smoothpos + nodes[id1].smoothpos) / 2.0;
-	rnode->setPosition(center);
+    Vector3 center = (m_all_nodes[m_axis_node0_idx].AbsPosition + m_all_nodes[m_axis_node1_idx].AbsPosition) / 2.0;
+    m_rim_scene_node->setPosition(center);
 
-	Vector3 axis = nodes[id0].smoothpos - nodes[id1].smoothpos;
-	axis.normalise();
+    Vector3 axis = m_all_nodes[m_axis_node0_idx].AbsPosition - m_all_nodes[m_axis_node1_idx].AbsPosition;
+    axis.normalise();
 
-	if (revrim) axis = -axis;
-	Vector3 ray = nodes[idstart].smoothpos - nodes[id0].smoothpos;
-	Vector3 onormal = axis.crossProduct(ray);
-	onormal.normalise();
-	ray = axis.crossProduct(onormal);
-	rnode->setOrientation(Quaternion(axis, onormal, ray));
+    if (m_is_rim_reverse) axis = -axis;
+    Vector3 ray = m_all_nodes[m_start_node_idx].AbsPosition - m_all_nodes[m_axis_node0_idx].AbsPosition;
+    Vector3 onormal = axis.crossProduct(ray);
+    onormal.normalise();
+    ray = axis.crossProduct(onormal);
+    m_rim_scene_node->setOrientation(Quaternion(axis, onormal, ray));
 
-	return Flexable::flexitPrepare(b);
+    return true;
 }
 
 void FlexMeshWheel::flexitCompute()
 {
-	flexit_center = updateVertices();
+    m_flexit_center = updateVertices();
 }
 
 Vector3 FlexMeshWheel::flexitFinal()
 {
-
-	//vbuf->lock(HardwareBuffer::HBL_NORMAL);
-	vbuf->writeData(0, vbuf->getSizeInBytes(), vertices, true);
-	//vbuf->unlock();
-	//msh->sharedVertexData->vertexBufferBinding->getBuffer(0)->writeData(0, vbuf->getSizeInBytes(), vertices, true);
-
-	return flexit_center;
+    m_hw_vbuf->writeData(0, m_hw_vbuf->getSizeInBytes(), m_vertices, true);
+    return m_flexit_center;
 }

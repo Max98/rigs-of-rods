@@ -1,54 +1,53 @@
 /*
-This source file is part of Rigs of Rods
-Copyright 2005-2012 Pierre-Michel Ricordel
-Copyright 2007-2012 Thomas Fischer
+    This source file is part of Rigs of Rods
+    Copyright 2005-2012 Pierre-Michel Ricordel
+    Copyright 2007-2012 Thomas Fischer
+    Copyright 2013-2018 Petr Ohlidal
 
-For more information, see http://www.rigsofrods.com/
+    For more information, see http://www.rigsofrods.org/
 
-Rigs of Rods is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License version 3, as
-published by the Free Software Foundation.
+    Rigs of Rods is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License version 3, as
+    published by the Free Software Foundation.
 
-Rigs of Rods is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
+    Rigs of Rods is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+    GNU General Public License for more details.
 
-You should have received a copy of the GNU General Public License
-along with Rigs of Rods.  If not, see <http://www.gnu.org/licenses/>.
+    You should have received a copy of the GNU General Public License
+    along with Rigs of Rods. If not, see <http://www.gnu.org/licenses/>.
 */
 
-// created by Thomas Fischer thomas{AT}thomasfischer{DOT}biz, 17th of August 2009
-
 #pragma once
-#ifndef __CharacterFactory_H_
-#define __CharacterFactory_H_
 
 #include "RoRPrerequisites.h"
 
 #include "Character.h"
-#include "StreamableFactory.h"
+#include "Network.h"
 
-class CharacterFactory : public StreamableFactory < CharacterFactory, Character >, public ZeroedMemoryAllocator
+#include <memory>
+#include <vector>
+
+namespace RoR {
+
+class CharacterFactory
 {
-	friend class Network;
-
 public:
+    CharacterFactory() {}
+    Character* createLocal(int playerColour);
+    void DeleteAllRemoteCharacters();
+    void update(float dt);
+#ifdef USE_SOCKETW
+    void handleStreamData(std::vector<RoR::Networking::recv_packet_t> packet);
+#endif // USE_SOCKETW
 
-	CharacterFactory();
-	~CharacterFactory();
+private:
 
-	Character *createLocal(int playerColour);
-	Character *createRemoteInstance(stream_reg_t *reg);
+    std::vector<std::unique_ptr<Character>> m_remote_characters;
 
-	void updateCharacters(float dt);
-	void updateLabels();
-
-protected:
-
-	// functions used by friends
-	void netUserAttributesChanged(int source, int streamid);
-	void localUserAttributesChanged(int newid);
+    void createRemoteInstance(int sourceid, int streamid);
+    void removeStreamSource(int sourceid);
 };
 
-#endif // __CharacterFactory_H_
+} // namespace RoR

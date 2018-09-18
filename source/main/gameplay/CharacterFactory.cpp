@@ -1,138 +1,104 @@
 /*
-This source file is part of Rigs of Rods
-Copyright 2005-2012 Pierre-Michel Ricordel
-Copyright 2007-2012 Thomas Fischer
+    This source file is part of Rigs of Rods
+    Copyright 2005-2012 Pierre-Michel Ricordel
+    Copyright 2007-2012 Thomas Fischer
+    Copyright 2013-2018 Petr Ohlidal
 
-For more information, see http://www.rigsofrods.com/
+    For more information, see http://www.rigsofrods.org/
 
-Rigs of Rods is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License version 3, as
-published by the Free Software Foundation.
+    Rigs of Rods is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License version 3, as
+    published by the Free Software Foundation.
 
-Rigs of Rods is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
+    Rigs of Rods is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+    GNU General Public License for more details.
 
-You should have received a copy of the GNU General Public License
-along with Rigs of Rods.  If not, see <http://www.gnu.org/licenses/>.
+    You should have received a copy of the GNU General Public License
+    along with Rigs of Rods. If not, see <http://www.gnu.org/licenses/>.
 */
-
-// created by Thomas Fischer thomas{AT}thomasfischer{DOT}biz, 7th of August 2009
 
 #include "CharacterFactory.h"
 
+#include "Application.h"
 #include "Character.h"
 
-using namespace Ogre;
+using namespace RoR;
 
-
-template<> CharacterFactory *StreamableFactory < CharacterFactory, Character >::_instance = 0;
-
-CharacterFactory::CharacterFactory()
+Character* CharacterFactory::createLocal(int playerColour)
 {
+    Character* ch = new Character(-1, 0, playerColour, false);
+    return ch;
 }
 
-CharacterFactory::~CharacterFactory()
+void CharacterFactory::createRemoteInstance(int sourceid, int streamid)
 {
+#ifdef USE_SOCKETW
+    RoRnet::UserInfo info;
+    RoR::Networking::GetUserInfo(sourceid, info);
+    int colour = info.colournum;
+
+    LOG(" new character for " + TOSTRING(sourceid) + ":" + TOSTRING(streamid) + ", colour: " + TOSTRING(colour));
+
+    m_remote_characters.push_back(std::unique_ptr<Character>(new Character(sourceid, streamid, colour, true)));
+#endif // USE_SOCKETW
 }
 
-Character *CharacterFactory::createLocal(int playerColour)
+void CharacterFactory::removeStreamSource(int sourceid)
 {
-	Character *ch = new Character(-1, 0, playerColour, false);
-
-	lockStreams();
-	std::map < int, std::map < unsigned int, Character *> > &streamables = getStreams();
-	streamables[-1][0] = ch;
-	unlockStreams();
-	return ch;
+    for (auto it = m_remote_characters.begin(); it != m_remote_characters.end(); it++)
+    {
+        if ((*it)->getSourceID() == sourceid)
+        {
+            (*it).reset();
+            m_remote_characters.erase(it);
+            return;
+        }
+    }
 }
 
-Character *CharacterFactory::createRemoteInstance(stream_reg_t *reg)
+void CharacterFactory::update(float dt)
 {
-	// NO LOCKS IN HERE, already locked
+    gEnv->player->update(dt);
+    gEnv->player->updateLabels();
 
-	LOG(" new character for " + TOSTRING(reg->sourceid) + ":" + TOSTRING(reg->streamid) + ", colour: " + TOSTRING(reg->colour));
-	Character *ch = new Character(reg->sourceid, reg->streamid, reg->colour, true);
-
-	// already locked
-	//lockStreams();
-	std::map < int, std::map < unsigned int, Character *> > &streamables = getStreams();
-	streamables[reg->sourceid][reg->streamid] = ch;
-	//unlockStreams();
-	return ch;
+    for (auto& c : m_remote_characters)
+    {
+        c->update(dt);
+        c->updateLabels();
+    }
 }
 
-void CharacterFactory::localUserAttributesChanged(int newid)
+void CharacterFactory::DeleteAllRemoteCharacters()
 {
-	lockStreams();
-	std::map < int, std::map < unsigned int, Character *> > &streamables = getStreams();
-	std::map < int, std::map < unsigned int, Character *> >::iterator it1;
-	std::map < unsigned int, Character *>::iterator it2;
-
-	if (streamables.find(-1) == streamables.end())
-	{
-		unlockStreams();
-		return;
-	}
-
-	Character *c = streamables[-1][0];
-	streamables[newid][0] = streamables[-1][0]; // add alias :)
-	c->setUID(newid);
-	c->updateNetLabel();
-	unlockStreams();
+    m_remote_characters.clear(); // std::unique_ptr<> will do the cleanup...
 }
 
-void CharacterFactory::netUserAttributesChanged(int source, int streamid)
+#ifdef USE_SOCKETW
+void CharacterFactory::handleStreamData(std::vector<RoR::Networking::recv_packet_t> packet_buffer)
 {
-	lockStreams();
-	std::map < int, std::map < unsigned int, Character *> > &streamables = getStreams();
-	std::map < int, std::map < unsigned int, Character *> >::iterator it1;
-	std::map < unsigned int, Character *>::iterator it2;
-
-	for (it1=streamables.begin(); it1!=streamables.end();it1++)
-	{
-		for (it2=it1->second.begin(); it2!=it1->second.end();it2++)
-		{
-			Character *c = dynamic_cast<Character*>(it2->second);
-			if (c) c->updateNetLabel();
-		}
-	}
-	unlockStreams();
+    for (auto packet : packet_buffer)
+    {
+        if (packet.header.command == RoRnet::MSG2_STREAM_REGISTER)
+        {
+            RoRnet::StreamRegister* reg = (RoRnet::StreamRegister *)packet.buffer;
+            if (reg->type == 1)
+            {
+                createRemoteInstance(packet.header.source, packet.header.streamid);
+            }
+        }
+        else if (packet.header.command == RoRnet::MSG2_USER_LEAVE)
+        {
+            removeStreamSource(packet.header.source);
+        }
+        else
+        {
+            for (auto& c : m_remote_characters)
+            {
+                c->receiveStreamData(packet.header.command, packet.header.source, packet.header.streamid, packet.buffer);
+            }
+        }
+    }
 }
-
-void CharacterFactory::updateCharacters(float dt)
-{
-	lockStreams();
-	std::map < int, std::map < unsigned int, Character *> > &streamables = getStreams();
-	std::map < int, std::map < unsigned int, Character *> >::iterator it1;
-	std::map < unsigned int, Character *>::iterator it2;
-
-	for (it1=streamables.begin(); it1!=streamables.end();it1++)
-	{
-		for (it2=it1->second.begin(); it2!=it1->second.end();it2++)
-		{
-			Character *c = dynamic_cast<Character*>(it2->second);
-			if (c) c->update(dt);
-		}
-	}
-	unlockStreams();
-}
-
-void CharacterFactory::updateLabels()
-{
-	lockStreams();
-	std::map < int, std::map < unsigned int, Character *> > &streamables = getStreams();
-	std::map < int, std::map < unsigned int, Character *> >::iterator it1;
-	std::map < unsigned int, Character *>::iterator it2;
-
-	for (it1=streamables.begin(); it1!=streamables.end();it1++)
-	{
-		for (it2=it1->second.begin(); it2!=it1->second.end();it2++)
-		{
-			Character *c = dynamic_cast<Character*>(it2->second);
-			if (c) c->updateNetLabelSize();
-		}
-	}
-	unlockStreams();
-}
+#endif // USE_SOCKETW

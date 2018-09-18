@@ -1,97 +1,94 @@
 /*
-	This source file is part of Rigs of Rods
-	Copyright 2005-2012 Pierre-Michel Ricordel
-	Copyright 2007-2012 Thomas Fischer
-	Copyright 2013-2014 Petr Ohlidal
+    This source file is part of Rigs of Rods
+    Copyright 2005-2012 Pierre-Michel Ricordel
+    Copyright 2007-2012 Thomas Fischer
+    Copyright 2013-2014 Petr Ohlidal
 
-	For more information, see http://www.rigsofrods.com/
+    For more information, see http://www.rigsofrods.org/
 
-	Rigs of Rods is free software: you can redistribute it and/or modify
-	it under the terms of the GNU General Public License version 3, as
-	published by the Free Software Foundation.
+    Rigs of Rods is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License version 3, as
+    published by the Free Software Foundation.
 
-	Rigs of Rods is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY; without even the implied warranty of
-	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-	GNU General Public License for more details.
+    Rigs of Rods is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
 
-	You should have received a copy of the GNU General Public License
-	along with Rigs of Rods.  If not, see <http://www.gnu.org/licenses/>.
+    You should have received a copy of the GNU General Public License
+    along with Rigs of Rods.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-/** 
-	@file   OgreSubsystem.h
-	@author Petr Ohlidal
-	@date   05/2014
-	@brief  OGRE engine wrapper.
-*/
+/// @file
+/// @author Petr Ohlidal
+/// @date   05/2014
+/// @brief  OGRE engine wrapper.
 
 #pragma once
 
 #include "RoRPrerequisites.h"
 
-namespace RoR
-{
+#include <OgreMaterial.h>
+
+namespace RoR {
 
 class OgreSubsystem : public ZeroedMemoryAllocator
 {
-	friend class Application; // Manages lifecycle of this class
-
 public:
 
-	bool StartOgre(Ogre::String const & name, Ogre::String const & hwnd, Ogre::String const & mainhwnd);
+    OgreSubsystem();
+    ~OgreSubsystem();
 
-	void WindowResized(Ogre::Vector2 const & size);
+    bool StartOgre(Ogre::String const & hwnd, Ogre::String const & mainhwnd);
 
-	Ogre::String GetMainHWND() 
-	{ 
-		return m_main_hwnd; 
-	}
+    void WindowResized(Ogre::Vector2 const & size);
 
-	unsigned long GetTimeSinceStartup();
+    Ogre::String GetMainHWND() 
+    { 
+        return m_main_hwnd; 
+    }
 
-	Ogre::Root* GetOgreRoot()
-	{
-		return m_ogre_root;
-	}
+    unsigned long GetTimeSinceStartup();
 
-	Ogre::RenderWindow* GetRenderWindow()
-	{
-		return m_render_window;
-	}
+    Ogre::Root* GetOgreRoot()
+    {
+        return m_ogre_root;
+    }
 
-	Ogre::Viewport* GetViewport()
-	{
-		return m_viewport;
-	}
+    Ogre::RenderWindow* GetRenderWindow()
+    {
+        return m_render_window;
+    }
 
-	void SetViewport(Ogre::Viewport* viewport)
-	{
-		m_viewport = viewport;
-	}
+    Ogre::Viewport* GetViewport()
+    {
+        return m_viewport;
+    }
 
-	Ogre::Timer* GetTimer()
-	{
-		return m_timer;
-	}
+    void SetViewport(Ogre::Viewport* viewport)
+    {
+        m_viewport = viewport;
+    }
+
+    Ogre::Timer* GetTimer()
+    {
+        return m_timer;
+    }
+
+    static Ogre::MaterialPtr GetMaterialByName(std::string const & name);
 
 private:
 
-	OgreSubsystem();
+    Ogre::String        m_hwnd;
+    Ogre::String        m_main_hwnd;
 
-	~OgreSubsystem();
+    Ogre::Root*         m_ogre_root;
+    Ogre::RenderWindow* m_render_window;
+    Ogre::Viewport*     m_viewport;
+    Ogre::Timer*        m_timer;
 
-	Ogre::String        m_hwnd; 
-	Ogre::String        m_main_hwnd;
-	Ogre::String        m_name;
-
-	Ogre::Root*		    m_ogre_root;
-	Ogre::RenderWindow*	m_render_window;
-	Ogre::Viewport*		m_viewport;
-	Ogre::Timer*		m_timer;
-
-	bool Configure();
-	bool LoadOgrePlugins(Ogre::String const & pluginsfile);
+    bool Configure();
+    bool LoadOgrePlugins(Ogre::String const & pluginsfile);
 };
 
 } // namespace RoR

@@ -1,205 +1,148 @@
 /*
-This source file is part of Rigs of Rods
-Copyright 2005-2012 Pierre-Michel Ricordel
-Copyright 2007-2012 Thomas Fischer
+    This source file is part of Rigs of Rods
+    Copyright 2005-2012 Pierre-Michel Ricordel
+    Copyright 2007-2012 Thomas Fischer
 
-For more information, see http://www.rigsofrods.com/
+    For more information, see http://www.rigsofrods.org/
 
-Rigs of Rods is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License version 3, as
-published by the Free Software Foundation.
+    Rigs of Rods is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License version 3, as
+    published by the Free Software Foundation.
 
-Rigs of Rods is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
+    Rigs of Rods is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+    GNU General Public License for more details.
 
-You should have received a copy of the GNU General Public License
-along with Rigs of Rods.  If not, see <http://www.gnu.org/licenses/>.
+    You should have received a copy of the GNU General Public License
+    along with Rigs of Rods. If not, see <http://www.gnu.org/licenses/>.
 */
 
-// created by Thomas Fischer thomas{AT}thomasfischer{DOT}biz, 24th of August 2009
+/// @file
+/// @author Thomas Fischer (thomas{AT}thomasfischer{DOT}biz)
+/// @date   24th of August 2009
 
 #pragma once
-#ifndef __BeamFactory_H_
-#define __BeamFactory_H_
 
 #include "RoRPrerequisites.h"
 
-#include "RigDef_Parser.h"
 #include "Beam.h"
-#include "StreamableFactory.h"
-#include "TwoDReplay.h"
+#include "DustManager.h" // Particle systems manager
+#include "Network.h"
+#include "Singleton.h"
 
-#include <pthread.h>
+#define PHYSICS_DT 0.0005 // fixed dt of 0.5 ms
 
-/**
-* Builds and manages vehicles; Manages multithreading.
-*/
-class BeamFactory : public StreamableFactory < BeamFactory, Beam >, public ZeroedMemoryAllocator
+class ThreadPool;
+
+namespace RoR {
+
+/// Builds and manages softbody actors. Manage physics and threading.
+/// TODO: Currently also manages gfx, which should be done by GfxActor
+/// HISTORICAL NOTE: Until 01/2018, this class was named `BeamFactory` (because `Actor` was `Beam`)
+class ActorManager
 {
-	friend class Network;
-	friend class RoRFrameListener;
-
+    friend class GameScript; // needs to call RemoveActorByCollisionBox()
 public:
 
-	BeamFactory();
-	~BeamFactory();
+    ActorManager();
+    ~ActorManager();
 
-	/**
-	* Does nothing; empty implementation of interface function.
-	*/
-	Beam *createLocal(int slotid) { return 0; }
+    /// @param cache_entry_number Needed for flexbody caching. Pass -1 if unavailable (flexbody caching will be disabled)
+    Actor* CreateLocalActor(
+        Ogre::Vector3 pos,
+        Ogre::Quaternion rot,
+        Ogre::String fname,
+        int cache_entry_number = -1,
+        collision_box_t* spawnbox = NULL,
+        const std::vector<Ogre::String>* actorconfig = nullptr,
+        RoR::SkinDef* skin = nullptr,
+        bool freePosition = false,
+        bool preloaded_with_terrain = false
+    );
 
-    /**
-    * @param cache_entry_number Needed for flexbody caching. Pass -1 if unavailable (flexbody caching will be disabled)
-    */
-	Beam* CreateLocalRigInstance(
-		Ogre::Vector3 pos, 
-		Ogre::Quaternion rot, 
-		Ogre::String fname,
-        int cache_entry_number = -1, 
-		collision_box_t *spawnbox = NULL, 
-		bool ismachine = false, 
-		const std::vector<Ogre::String> *truckconfig = nullptr, 
-		Skin *skin = nullptr, 
-		bool freePosition = false,
-		bool preloaded_with_terrain = false
-		);
-	
-	Beam *createRemoteInstance(stream_reg_t *reg);
+    void           UpdateActors(Actor* player_actor, float dt);
+    void           SyncWithSimThread();
+    void           UpdatePhysicsSimulation();
+    void           UpdateActorVisuals(float dt, Actor* player_actor); // TODO: This should be done by GfxActor
+    void           WakeUpAllActors();
+    void           SendAllActorsSleeping();
+    int            CheckNetworkStreamsOk(int sourceid);
+    int            CheckNetRemoteStreamsOk(int sourceid);
+    void           NotifyActorsWindowResized();
+    void           RecalcGravityMasses();
+    void           MuteAllActors();
+    void           UnmuteAllActors();
+    void           JoinFlexbodyTasks(); /// Waits until all flexbody tasks are finished, but does not update the hardware buffers
+    void           UpdateFlexbodiesPrepare();
+    void           UpdateFlexbodiesFinal();
+    DustManager&   GetParticleManager()                    { return m_particle_manager; }
+    void           SetTrucksForcedAwake(bool forced)       { m_forced_awake = forced; };
+    int            GetNumUsedActorSlots() const            { return m_free_actor_slot; }; // TODO: Tasks requiring search over all actors should be done internally. ~ only_a_ptr, 01/2018
+    Actor**        GetInternalActorSlots()                 { return m_actors; }; // TODO: Tasks requiring search over all actors should be done internally. ~ only_a_ptr, 01/2018
+    void           SetSimulationSpeed(float speed)         { m_simulation_speed = std::max(0.0f, speed); };
+    float          GetSimulationSpeed() const              { return m_simulation_speed; };
+    Actor*         FetchNextVehicleOnList(Actor* player, Actor* prev_player);
+    Actor*         FetchPreviousVehicleOnList(Actor* player, Actor* prev_player);
+    Actor*         FetchRescueVehicle();
+    void           CleanUpAllActors(); //!< Call this after simulation loop finishes.
+    Actor*         GetActorByNetworkLinks(int source_id, int stream_id); // used by character
+    void           RepairActor(Collisions* collisions, const Ogre::String& inst, const Ogre::String& box, bool keepPosition = false);
+    void           UpdateSleepingState(Actor* player_actor, float dt);
+    void           RemoveActorByCollisionBox(Collisions* collisions, const Ogre::String& inst, const Ogre::String& box); //!< Only for scripting
+    void           RemoveActorInternal(int actor_id); //!< DO NOT CALL DIRECTLY! Use `SimController` for public interface
+    Actor*         GetActorByIdInternal(int number); //!< DO NOT CALL DIRECTLY! Use `SimController` for public interface
 
-	bool getThreadingMode() { return thread_mode; };
+#ifdef USE_SOCKETW
+    void           HandleActorStreamData(std::vector<RoR::Networking::recv_packet_t> packet);
+#endif
 
-	/**
-	* Threading; Waits until work is done
-	*/
-	void _WorkerWaitForSync();
-	
-	/**
-	* Threading; Prepare to start working
-	*/
-	void _WorkerPrepareStart(); 
+#ifdef USE_ANGELSCRIPT
+    void           AddRef() {};  // we have to add this to be able to use the class as reference inside scripts
+    void           Release() {};
+#endif
 
-	/**
-	* Threading; Signals to start working
-	*/
-	void _WorkerSignalStart(); 
+    // A list of all beams interconnecting two actors
+    std::map<beam_t*, std::pair<Actor*, Actor*>> inter_actor_links;
 
-	bool asynchronousPhysics() { return async_physics; };
-	int getNumCpuCores() { return num_cpu_cores; };
+private:
 
-	Beam *getBeam(int source_id, int stream_id); // used by character
+    void           SetupActor(Actor* actor,
+                              std::shared_ptr<RigDef::File> def,
+                              Ogre::Vector3 const& spawn_position,
+                              Ogre::Quaternion const& spawn_rotation,
+                              collision_box_t* spawn_box,
+                              bool free_positioned,
+                              bool _networked,
+                              int cache_entry_number = -1);
+    bool           CheckAabbIntersection(Ogre::AxisAlignedBox a, Ogre::AxisAlignedBox b, float scale = 1.0f); //!< Returns whether or not the two (scaled) bounding boxes intersect.
+    bool           CheckActorAabbIntersection(int a, int b, float scale = 1.0f);     //!< Returns whether or not the bounding boxes of truck a and truck b intersect. Based on the default truck bounding boxes.
+    bool           PredictActorAabbIntersection(int a, int b, float scale = 1.0f);   //!< Returns whether or not the bounding boxes of truck a and truck b might intersect during the next framestep. Based on the default truck bounding boxes.
+    bool           CheckActorCollAabbIntersect(int a, int b, float scale = 1.0f);    //!< Returns whether or not the bounding boxes of truck a and truck b intersect. Based on the truck collision bounding boxes.
+    bool           PredictActorCollAabbIntersect(int a, int b, float scale = 1.0f);  //!< Returns whether or not the bounding boxes of truck a and truck b might intersect during the next framestep. Based on the truck collision bounding boxes.
+    int            CreateRemoteInstance(RoRnet::ActorStreamRegister* reg);
+    void           RemoveStreamSource(int sourceid);
+    void           LogParserMessages();
+    void           LogSpawnerMessages();
+    void           RecursiveActivation(int j, std::bitset<MAX_ACTORS>& visited);
+    int            GetFreeActorSlot();
+    int            FindActorInsideBox(Collisions* collisions, const Ogre::String& inst, const Ogre::String& box);
+    void           DeleteActorInternal(Actor* b);
+    std::shared_ptr<RigDef::File>   FetchActorDef(const char* filename, bool predefined_on_terrain = false);
 
-	Beam *getCurrentTruck();
-	Beam *getTruck(int number);
-	Beam **getTrucks() { return trucks; };
-	int getPreviousTruckNumber() { return previous_truck; };
-	int getCurrentTruckNumber() { return current_truck; };
-	int getTruckCount() { return free_truck; };
-	bool allTrucksForcedActive() { return forcedActive; };
-
-	void setCurrentTruck(int new_truck);
-
-	bool removeBeam(Beam *b);
-	void removeCurrentTruck();
-	void removeAllTrucks();
-	void removeTruck(Collisions *collisions, const Ogre::String &inst, const Ogre::String &box);
-	void removeTruck(int truck);
-	
-	void MuteAllTrucks();
-	void UnmuteAllTrucks();
-
-	void p_removeAllTrucks();
-
-	bool enterRescueTruck();
-	void repairTruck(Collisions *collisions, const Ogre::String &inst, const Ogre::String &box, bool keepPosition=false);
-
-	/**
-	* TIGHT-LOOP; Logic: display, particles, sound; 
-	*/
-	void updateVisual(float dt);
-	void updateAI(float dt);
-
-	inline unsigned long getPhysFrame() { return physFrame; };
-
-	void calcPhysics(float dt);
-	void recalcGravityMasses();
-
-	/** 
-	* Returns whether or not the bounding boxes of truck a and truck b intersect. Based on the default truck bounding boxes.
-	*/
-	bool truckIntersectionAABB(int a, int b);
-
-	/** 
-	* Returns whether or not the bounding boxes of truck a and truck b might intersect during the next framestep. Based on the default truck bounding boxes.
-	*/
-	bool predictTruckIntersectionAABB(int a, int b);
-
-	/** 
-	* Returns whether or not the bounding boxes of truck a and truck b intersect. Based on the truck collision bounding boxes.
-	*/
-	bool truckIntersectionCollAABB(int a, int b);
-
-	/** 
-	* Returns whether or not the bounding boxes of truck a and truck b might intersect during the next framestep. Based on the truck collision bounding boxes.
-	*/
-	bool predictTruckIntersectionCollAABB(int a, int b);
-
-	void activateAllTrucks();
-	void checkSleepingState();
-	void sendAllTrucksSleeping();
-	void setTrucksForcedActive(bool forced) { forcedActive = forced; };
-
-	void prepareShutdown();
-
-	void windowResized();
-
-	bool thread_done;
-	pthread_cond_t thread_done_cv;
-	pthread_mutex_t thread_done_mutex;
-	bool work_done;
-	pthread_cond_t work_done_cv;
-	pthread_mutex_t work_done_mutex;
-	pthread_t worker_thread;
-
-	ThreadPool *beamThreadPool;
-
-protected:
-	
-	bool async_physics;
-	bool thread_mode;
-	int num_cpu_cores;
-
-	Beam *trucks[MAX_TRUCKS];
-	int free_truck;
-	int previous_truck;
-	int current_truck;
-
-	bool forcedActive; // disables sleepcount
-
-	TwoDReplay *tdr;
-
-	unsigned long physFrame;
-
-	void LogParserMessages();
-	void LogSpawnerMessages();
-
-	bool checkForActive(int j, std::bitset<MAX_TRUCKS> &sleepyList);
-	void recursiveActivation(int j);
-
-	int getFreeTruckSlot();
-	int findTruckInsideBox(Collisions *collisions, const Ogre::String &inst, const Ogre::String &box);
-
-	// functions used by friends
-	void netUserAttributesChanged(int source, int streamid);
-	void localUserAttributesChanged(int newid);
-
-	bool syncRemoteStreams();
-	void updateGUI();
-	void removeInstance(Beam *b);
-	void removeInstance(stream_del_t *del);
-	void _deleteTruck(Beam *b);
+    std::map<std::string, std::shared_ptr<RigDef::File>>   m_actor_defs;
+    std::map<int, std::vector<int>> m_stream_mismatches; //!< Networking: A list of streams without a corresponding actor in the actor-array for each stream source
+    std::unique_ptr<ThreadPool>     m_sim_thread_pool;
+    std::shared_ptr<Task>           m_sim_task;
+    int             m_num_cpu_cores;
+    Actor*          m_actors[MAX_ACTORS];//!< All actors; slots are not reused
+    int             m_free_actor_slot;   //!< Slots are not reused
+    bool            m_forced_awake;      //!< disables sleep counters
+    unsigned long   m_physics_frames;
+    int             m_physics_steps;
+    float           m_dt_remainder;     ///< Keeps track of the rounding error in the time step calculation
+    float           m_simulation_speed; ///< slow motion < 1.0 < fast motion
+    DustManager     m_particle_manager;
 };
 
-#endif // __BeamFactory_H_
+} // namespace RoR

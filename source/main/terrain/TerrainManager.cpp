@@ -1,36 +1,40 @@
 /*
-This source file is part of Rigs of Rods
-Copyright 2005-2012 Pierre-Michel Ricordel
-Copyright 2007-2012 Thomas Fischer
+    This source file is part of Rigs of Rods
+    Copyright 2005-2012 Pierre-Michel Ricordel
+    Copyright 2007-2012 Thomas Fischer
+    Copyright 2013-2016 Petr Ohlidal
 
-For more information, see http://www.rigsofrods.com/
+    For more information, see http://www.rigsofrods.org/
 
-Rigs of Rods is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License version 3, as
-published by the Free Software Foundation.
+    Rigs of Rods is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License version 3, as
+    published by the Free Software Foundation.
 
-Rigs of Rods is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
+    Rigs of Rods is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+    GNU General Public License for more details.
 
-You should have received a copy of the GNU General Public License
-along with Rigs of Rods.  If not, see <http://www.gnu.org/licenses/>.
+    You should have received a copy of the GNU General Public License
+    along with Rigs of Rods. If not, see <http://www.gnu.org/licenses/>.
 */
+
 #include "TerrainManager.h"
 
+#include "Application.h"
 #include "BeamData.h"
 #include "BeamFactory.h"
 #include "Collisions.h"
 #include "Dashboard.h"
-#include "DustManager.h"
 #include "EnvironmentMap.h"
 #include "ErrorUtils.h"
-#include "GUIFriction.h"
 #include "GlowMaterialListener.h"
+#include "GUIManager.h"
+#include "GUI_LoadingWindow.h"
 #include "HDRListener.h"
 #include "HydraxWater.h"
 #include "Language.h"
+#include "RoRFrameListener.h"
 #include "Scripting.h"
 #include "Settings.h"
 #include "ShadowManager.h"
@@ -41,770 +45,678 @@ along with Rigs of Rods.  If not, see <http://www.gnu.org/licenses/>.
 #include "TerrainObjectManager.h"
 #include "Utils.h"
 #include "Water.h"
-#include "OgreTerrainPaging.h"
 
+#include <Terrain/OgreTerrainPaging.h>
+#include <Terrain/OgreTerrainGroup.h>
+
+using namespace RoR;
 using namespace Ogre;
 
-TerrainManager::TerrainManager() : 
-	  m_terrain_config()
-	, character(0)
-	, collisions(0)
-	, dashboard(0)
-	, envmap(0)
-	, geometry_manager(0)
-	, hdr_listener(0)
-	, object_manager(0)
-	, shadow_manager(0)
-	, sky_manager(0)
-	, survey_map(0)
-	, water(0)
-	, authors()
-	, ambient_color(ColourValue::White)
-	, category_id(0)
-	, fade_color(ColourValue::Black)
-	, far_clip(1000)
-	, file_hash("")
-	, gravity(DEFAULT_GRAVITY)
-	, guid("")
-	, main_light(0)
-	, ogre_terrain_config_filename("")
-	, paged_detail_factor(0.0f)
-	, paged_mode(0)
-	, start_position(Vector3::ZERO)
-	, terrain_name("")
-	, use_caelum(false)
-	, version(1)
-	, water_line(0.0f)
+TerrainManager::TerrainManager()
+    : m_collisions(0)
+    , m_dashboard(0)
+    , m_geometry_manager(0)
+    , m_hdr_listener(0)
+    , m_object_manager(0)
+    , m_shadow_manager(0)
+    , m_sky_manager(0)
+    , SkyX_manager(0)
+    , m_survey_map(0)
+    , m_water(0)
+    , m_sight_range(1000)
+    , m_main_light(0)
+    , m_paged_detail_factor(0.0f)
+    , m_paged_mode(0)
+    , m_cur_gravity(DEFAULT_GRAVITY)
 {
-	use_caelum = SSETTING("Sky effects", "Caelum (best looking, slower)") == "Caelum (best looking, slower)";
 }
 
 TerrainManager::~TerrainManager()
 {
-	m_terrain_config.clear();
 
-	//I think that the order is important
+    //I think that the order is important
 
-	if (sky_manager != nullptr)
-	{
-		delete(sky_manager);
-		gEnv->sky = nullptr;
-		sky_manager = nullptr;
-	}
+    if (m_sky_manager != nullptr)
+    {
+        delete(m_sky_manager);
+        m_sky_manager = nullptr;
+    }
 
-	if (main_light != nullptr)
-	{
-		gEnv->sceneManager->destroyAllLights();
-		main_light = nullptr;
-	}
+    if (SkyX_manager != nullptr)
+    {
+        delete(SkyX_manager);
+        gEnv->SkyX = nullptr;
+        SkyX_manager = nullptr;
+    }
 
-	if (envmap != nullptr)
-	{
-		delete(envmap);
-		envmap = nullptr;
-	}
+    if (m_main_light != nullptr)
+    {
+        gEnv->sceneManager->destroyAllLights();
+        m_main_light = nullptr;
+    }
 
-	if (dashboard != nullptr)
-	{
-		delete(dashboard);
-		dashboard = nullptr;
-	}
+    if (m_dashboard != nullptr)
+    {
+        delete(m_dashboard);
+        m_dashboard = nullptr;
+    }
 
-	if (water != nullptr)
-	{
-		delete(water);
-		water = nullptr;
-	}
+    if (m_water != nullptr)
+    {
+        delete(m_water);
+        m_water = nullptr;
+    }
 
-	if (object_manager != nullptr)
-	{
-		delete(object_manager);
-		object_manager = nullptr;
-	}
+    if (m_object_manager != nullptr)
+    {
+        delete(m_object_manager);
+        m_object_manager = nullptr;
+    }
 
-	if (geometry_manager != nullptr)
-	{
-		delete(geometry_manager);
-		geometry_manager = nullptr;
-	}
+    if (m_geometry_manager != nullptr)
+    {
+        delete(m_geometry_manager);
+        m_geometry_manager = nullptr;
+    }
+
+    if (m_shadow_manager != nullptr)
+    {
+        delete(m_shadow_manager);
+        m_shadow_manager = nullptr;
+    }
+
+    if (m_survey_map != nullptr)
+    {
+        delete m_survey_map;
+        m_survey_map = nullptr;
+    }
 }
 
 // some shortcut to remove ugly code
-#ifdef USE_MYGUI
-#include "LoadingWindow.h"
-#define PROGRESS_WINDOW(x, y) { LOG(Ogre::String("  ## ") + y); LoadingWindow::getSingleton().setProgress(x, y); }
-#else
-#define PROGRESS_WINDOW(x, y) { LOG(Ogre::String("  ## ") + y) }
-#endif //USE_MYGUI
-
-void TerrainManager::loadTerrainConfigBasics(Ogre::DataStreamPtr &ds)
-{
-	// now generate the hash of it
-	generateHashFromDataStream(ds, file_hash);
-
-	m_terrain_config.load(ds, "\t:=", true);
-
-	// read in the settings
-	terrain_name = m_terrain_config.getSetting("Name", "General");
-	if (terrain_name.empty())
-	{
-		ErrorUtils::ShowError(_L("Terrain loading error"), _L("the terrain name cannot be empty"));
-		exit(125);
-	}
-
-	ogre_terrain_config_filename = m_terrain_config.getSetting("GeometryConfig", "General");
-	// otc = ogre terrain config
-	if (ogre_terrain_config_filename.find(".otc") == String::npos)
-	{
-		ErrorUtils::ShowError(_L("Terrain loading error"), _L("the new terrain mode only supports .otc configurations"));
-		exit(125);
-	}
-
-	ambient_color = StringConverter::parseColourValue(m_terrain_config.getSetting("AmbientColor", "General"), ColourValue::White);
-	category_id = StringConverter::parseInt(m_terrain_config.getSetting("CategoryID", "General"), 129);
-	guid = m_terrain_config.getSetting("GUID", "General");
-	start_position = StringConverter::parseVector3(m_terrain_config.getSetting("StartPosition", "General"), Vector3(512.0f, 0.0f, 512.0f));
-	version = StringConverter::parseInt(m_terrain_config.getSetting("Version", "General"), 1);
-	gravity = StringConverter::parseReal(m_terrain_config.getSetting("Gravity", "General"), -9.81);
-
-	// parse author info
-	ConfigFile::SettingsIterator it = m_terrain_config.getSettingsIterator("Authors");
-
-	authors.clear();
-
-	while (it.hasMoreElements())
-	{
-		String type = it.peekNextKey();   // e.g. terrain
-		String name = it.peekNextValue(); // e.g. john doe
-
-		if (!name.empty())
-		{
-			authorinfo_t author;
-
-			author.type = type;
-			author.name = name;
-
-			authors.push_back(author);
-		}
-
-		it.moveNext();
-	}
-}
+#   define PROGRESS_WINDOW(x, y) { LOG(Ogre::String("  ## ") + y); RoR::App::GetGuiManager()->GetLoadingWindow()->setProgress(x, y); }
 
 void TerrainManager::loadTerrain(String filename)
 {
-	DataStreamPtr ds;
+    DataStreamPtr ds;
 
-	try
-	{
-		String group = ResourceGroupManager::getSingleton().findGroupContainingResource(filename);
-		ds = ResourceGroupManager::getSingleton().openResource(filename, group);
-	} catch(...)
-	{
-		LOG("Terrain not found: " + String(filename));
-		ErrorUtils::ShowError(_L("Terrain loading error"), _L("Terrain not found: ") + filename);
-		exit(125);
-	}
+    try
+    {
+        String group = ResourceGroupManager::getSingleton().findGroupContainingResource(filename);
+        ds = ResourceGroupManager::getSingleton().openResource(filename, group);
+    }
+    catch (...)
+    {
+        LOG("[RoR|Terrain] File not found: " + filename);
+        return;
+    }
 
-	PROGRESS_WINDOW(10, _L("Loading Terrain Configuration"));
+    PROGRESS_WINDOW(10, _L("Loading Terrain Configuration"));
 
-	LOG(" ===== LOADING TERRAIN " + filename);
+    LOG(" ===== LOADING TERRAIN " + filename);
 
-	loadTerrainConfigBasics(ds);
+    Terrn2Parser parser;
+    if (! parser.LoadTerrn2(m_def, ds))
+    {
+        LOG("[RoR|Terrain] Failed to parse: " + filename);
+        for (std::string msg : parser.GetMessages())
+        {
+            LOG("[RoR|Terrain] \tMessage: " + msg);
+        }
+        return;
+    }
+    m_cur_gravity = m_def.gravity;
 
-	// then, init the subsystems, order is important :)
-	initSubSystems();
+    // then, init the subsystems, order is important :)
+    initSubSystems();
 
-	fixCompositorClearColor();
+    fixCompositorClearColor();
 
-	LOG(" ===== LOADING TERRAIN GEOMETRY " + filename);
+    LOG(" ===== LOADING TERRAIN GEOMETRY " + filename);
 
-	// load the terrain geometry
-	PROGRESS_WINDOW(80, _L("Loading Terrain Geometry"));
-	geometry_manager->loadOgreTerrainConfig(ogre_terrain_config_filename);
+    // load the terrain geometry
+    PROGRESS_WINDOW(80, _L("Loading Terrain Geometry"));
+    m_geometry_manager->InitTerrain(m_def.ogre_ter_conf_filename);
 
-	LOG(" ===== LOADING TERRAIN WATER " + filename);
-	// must happen here
-	initWater();
+    LOG(" ===== LOADING TERRAIN WATER " + filename);
+    // must happen here
+    initWater();
 
-	LOG(" ===== LOADING TERRAIN OBJECTS " + filename);
+    LOG(" ===== LOADING TERRAIN OBJECTS " + filename);
 
-	PROGRESS_WINDOW(90, _L("Loading Terrain Objects"));
-	loadTerrainObjects();
+    PROGRESS_WINDOW(90, _L("Loading Terrain Objects"));
+    loadTerrainObjects();
 
-	collisions->printStats();
-	
-	// bake the decals
-	//finishTerrainDecal();
-	
-	// init things after loading the terrain
-	initTerrainCollisions();
+    // bake the decals
+    //finishTerrainDecal();
 
-	// init the survey map
-	if (!BSETTING("disableOverViewMap", false))
-	{
-		PROGRESS_WINDOW(45, _L("Initializing Overview Map Subsystem"));
-		initSurveyMap();
-	}
+    // init things after loading the terrain
+    initTerrainCollisions();
 
-	collisions->finishLoadingTerrain();
-	LOG(" ===== TERRAIN LOADING DONE " + filename);
+    // init the survey map
+    if (!RoR::App::gfx_minimap_disabled.GetActive())
+    {
+        PROGRESS_WINDOW(45, _L("Initializing Overview Map Subsystem"));
+        m_survey_map = new SurveyMapManager();
+    }
+
+    PROGRESS_WINDOW(95, _L("Initializing terrain light properties"));
+    m_geometry_manager->UpdateMainLightPosition(); // Initial update takes a while
+    m_collisions->finishLoadingTerrain();
+    LOG(" ===== TERRAIN LOADING DONE " + filename);
+
+    // causing visual ground glitches
+/* if (App::gfx_sky_mode.GetActive() == GfxSkyMode::SKYX)
+    {
+        TerrainGroup::TerrainIterator ti = geometry_manager->getTerrainGroup()->getTerrainIterator();
+        while (ti.hasMoreElements())
+        {
+            Terrain* t = ti.getNext()->instance;
+            MaterialPtr ptr = t->getMaterial();
+            gEnv->SkyX->GetSkyX()->getGPUManager()->addGroundPass(
+                    static_cast<Ogre::MaterialPtr>(ptr)->getTechnique(0)->createPass(), 5000, Ogre::SBT_TRANSPARENT_COLOUR);
+        }
+    }*/
+
 }
 
 void TerrainManager::initSubSystems()
 {
-	// geometry - ogre terrain things
-	PROGRESS_WINDOW(15, _L("Initializing Geometry Subsystem"));
-	initGeometry();
+    // geometry - ogre terrain things
+    initShadows();
 
-	// objects  - .odef support
-	PROGRESS_WINDOW(17, _L("Initializing Object Subsystem"));
-	initObjects();
-	
-	PROGRESS_WINDOW(19, _L("Initializing Collision Subsystem"));
-	initCollisions();
+    PROGRESS_WINDOW(15, _L("Initializing Geometry Subsystem"));
+    m_geometry_manager = new TerrainGeometryManager(this);
 
-	PROGRESS_WINDOW(19, _L("Initializing Script Subsystem"));
-	initScripting();
+    // objects  - .odef support
+    PROGRESS_WINDOW(17, _L("Initializing Object Subsystem"));
+    initObjects();
 
-	PROGRESS_WINDOW(21, _L("Initializing Shadow Subsystem"));
-	initShadows();
+    PROGRESS_WINDOW(19, _L("Initializing Collision Subsystem"));
+    m_collisions = new Collisions();
+    gEnv->collisions = m_collisions;
 
-	PROGRESS_WINDOW(25, _L("Initializing Camera Subsystem"));
-	initCamera();
+    PROGRESS_WINDOW(19, _L("Initializing Script Subsystem"));
+    initScripting();
 
-	// sky, must come after camera due to far_clip
-	PROGRESS_WINDOW(23, _L("Initializing Sky Subsystem"));
-	initSkySubSystem();
+    PROGRESS_WINDOW(21, _L("Initializing Shadow Subsystem"));
 
-	PROGRESS_WINDOW(27, _L("Initializing Light Subsystem"));
-	initLight();
+    PROGRESS_WINDOW(25, _L("Initializing Camera Subsystem"));
+    initCamera();
 
-	if (SSETTING("Sky effects", "Sandstorm (fastest)") == "Sandstorm (fastest)") //Caelum has its own fog management
-	{
-		PROGRESS_WINDOW(29, _L("Initializing Fog Subsystem"));
-		initFog();
-	}
+    // sky, must come after camera due to m_sight_range
+    PROGRESS_WINDOW(23, _L("Initializing Sky Subsystem"));
+    initSkySubSystem();
 
-	PROGRESS_WINDOW(31, _L("Initializing Vegetation Subsystem"));
-	initVegetation();
+    PROGRESS_WINDOW(27, _L("Initializing Light Subsystem"));
+    initLight();
 
-	// water must be done later on
-	//PROGRESS_WINDOW(33, _L("Initializing Water Subsystem"));
-	//initWater();
+    if (App::gfx_sky_mode.GetActive() != GfxSkyMode::CAELUM) //Caelum has its own fog management
+    {
+        PROGRESS_WINDOW(29, _L("Initializing Fog Subsystem"));
+        initFog();
+    }
 
-	if (BSETTING("HDR", false))
-	{
-		PROGRESS_WINDOW(35, _L("Initializing HDR Subsystem"));
-		initHDR();
-	}
-	if (BSETTING("Glow", false))
-	{
-		PROGRESS_WINDOW(37, _L("Initializing Glow Subsystem"));
-		initGlow();
-	}
-	if (BSETTING("Motion blur", false))
-	{
-		PROGRESS_WINDOW(39, _L("Initializing Motion Blur Subsystem"));
-		initMotionBlur();
-	}
-	if (BSETTING("Sunburn", false))
-	{
-		PROGRESS_WINDOW(41, _L("Initializing Sunburn Subsystem"));
-		initSunburn();
-	}
-	if (!BSETTING("Envmapdisable", false))
-	{
-		PROGRESS_WINDOW(43, _L("Initializing Environment Map Subsystem"));
-		initEnvironmentMap();
-	}
+    PROGRESS_WINDOW(31, _L("Initializing Vegetation Subsystem"));
+    initVegetation();
 
-	PROGRESS_WINDOW(47, _L("Initializing Dashboards Subsystem"));
-	initDashboards();
+    // water must be done later on
+    //PROGRESS_WINDOW(33, _L("Initializing Water Subsystem"));
+    //initWater();
+
+    if (App::gfx_enable_hdr.GetActive())
+    {
+        PROGRESS_WINDOW(35, _L("Initializing HDR Subsystem"));
+        initHDR();
+    }
+    if (RoR::App::gfx_enable_glow.GetActive())
+    {
+        PROGRESS_WINDOW(37, _L("Initializing Glow Subsystem"));
+        initGlow();
+    }
+    if (App::gfx_motion_blur.GetActive())
+    {
+        PROGRESS_WINDOW(39, _L("Initializing Motion Blur Subsystem"));
+        initMotionBlur();
+    }
+    if (RoR::App::gfx_enable_sunburn.GetActive())
+    {
+        PROGRESS_WINDOW(41, _L("Initializing Sunburn Subsystem"));
+        initSunburn();
+    }
+
+    PROGRESS_WINDOW(47, _L("Initializing Dashboards Subsystem"));
+    initDashboards();
 }
 
 void TerrainManager::initCamera()
 {
-	gEnv->mainCamera->getViewport()->setBackgroundColour(ambient_color);
-	gEnv->mainCamera->setPosition(start_position);
+    gEnv->mainCamera->getViewport()->setBackgroundColour(m_def.ambient_color);
+    gEnv->mainCamera->setPosition(m_def.start_position);
 
-	far_clip = FSETTING("SightRange", 4500);
+    m_sight_range = App::gfx_sight_range.GetActive();
 
-	if (far_clip < UNLIMITED_SIGHTRANGE)
-		gEnv->mainCamera->setFarClipDistance(far_clip);
-	else
-	{
-		String waterSettingsString = SSETTING("Water effects", "Hydrax");
-
-		// disabled in global config
-		if (waterSettingsString == "None") return;
-		// disabled in map config
-		if (!StringConverter::parseBool(m_terrain_config.getSetting("Water", "General"))) return;
-
-		if (waterSettingsString == "Hydrax")
-			gEnv->mainCamera->setFarClipDistance(9999 * 6); //Unlimited
-		else
-			gEnv->mainCamera->setFarClipDistance(0); //Unlimited
-	}
+    if (m_sight_range < UNLIMITED_SIGHTRANGE)
+        gEnv->mainCamera->setFarClipDistance(m_sight_range);
+    else
+    {
+        // disabled in global config
+        if (App::gfx_water_mode.GetActive() != GfxWaterMode::HYDRAX)
+            gEnv->mainCamera->setFarClipDistance(0); //Unlimited
+        else
+            gEnv->mainCamera->setFarClipDistance(9999 * 6); //Unlimited for hydrax and stuff
+    }
 }
 
 void TerrainManager::initSkySubSystem()
 {
 #ifdef USE_CAELUM
-	// Caelum skies
-	if (use_caelum)
-	{
-		sky_manager = new SkyManager();
-		gEnv->sky = sky_manager;
+    // Caelum skies
+    if (App::gfx_sky_mode.GetActive() == GfxSkyMode::CAELUM)
+    {
+        m_sky_manager = new SkyManager();
 
-		// try to load caelum config
-		String caelumConfig = m_terrain_config.getSetting("CaelumConfigFile", "General");
-
-		if (!caelumConfig.empty() && ResourceGroupManager::getSingleton().resourceExistsInAnyGroup(caelumConfig))
-		{
-			// config provided and existing, use it :)
-			int caelumFogStart = StringConverter::parseInt(m_terrain_config.getSetting("CaelumFogStart", "General"),-1);
-			int caelumFogEnd = StringConverter::parseInt(m_terrain_config.getSetting("CaelumFogEnd", "General"),-1);
-			sky_manager->loadScript(caelumConfig, caelumFogStart, caelumFogEnd);
-		} else
-		{
-			// no config provided, fall back to the default one
-			sky_manager->loadScript("ror_default_sky");
-		}
-
-	} else
+        // try to load caelum config
+        if (!m_def.caelum_config.empty() && ResourceGroupManager::getSingleton().resourceExistsInAnyGroup(m_def.caelum_config))
+        {
+            // config provided and existing, use it :)
+            m_sky_manager->LoadCaelumScript(m_def.caelum_config, m_def.caelum_fog_start, m_def.caelum_fog_end);
+        }
+        else
+        {
+            // no config provided, fall back to the default one
+            m_sky_manager->LoadCaelumScript("ror_default_sky");
+        }
+    }
+    else
 #endif //USE_CAELUM
-	{
-		String sandStormConfig = m_terrain_config.getSetting("SandStormCubeMap", "General");
+    // SkyX skies
+    if (App::gfx_sky_mode.GetActive() == GfxSkyMode::SKYX)
+    {
+         // try to load SkyX config
+         if (!m_def.skyx_config.empty() && ResourceGroupManager::getSingleton().resourceExistsInAnyGroup(m_def.skyx_config))
+            SkyX_manager = new SkyXManager(m_def.skyx_config);
+         else
+            SkyX_manager = new SkyXManager("SkyXDefault.skx");
 
-		if (!sandStormConfig.empty())
-		{
-			// use custom
-			gEnv->sceneManager->setSkyBox(true, sandStormConfig, 100, true);
-		} else
-		{
-			// use default
-			gEnv->sceneManager->setSkyBox(true, "tracks/skyboxcol", 100, true);
-		}
-	}
+         gEnv->SkyX = SkyX_manager;
+    }
+    else
+    {
+
+        if (!m_def.cubemap_config.empty())
+        {
+            // use custom
+            gEnv->sceneManager->setSkyBox(true, m_def.cubemap_config, 100, true);
+        }
+        else
+        {
+            // use default
+            gEnv->sceneManager->setSkyBox(true, "tracks/skyboxcol", 100, true);
+        }
+    }
 }
 
 void TerrainManager::initLight()
 {
-	if (use_caelum)
-	{
+    if (App::gfx_sky_mode.GetActive() == GfxSkyMode::CAELUM)
+    {
 #ifdef USE_CAELUM
-		main_light = sky_manager->getMainLight();
+        m_main_light = m_sky_manager->GetSkyMainLight();
 #endif
-	} else
-	{
-		// screw caelum, we will roll our own light
+    }
+    else if (App::gfx_sky_mode.GetActive() == GfxSkyMode::SKYX)
+    {
+        m_main_light = SkyX_manager->getMainLight();
+    }
+    else
+    {
+        // screw caelum, we will roll our own light
 
-		// Create a light
-		main_light = gEnv->sceneManager->createLight("MainLight");
-		//directional light for shadow
-		main_light->setType(Light::LT_DIRECTIONAL);
-		main_light->setDirection(0.785, -0.423, 0.453);
+        // Create a light
+        m_main_light = gEnv->sceneManager->createLight("MainLight");
+        //directional light for shadow
+        m_main_light->setType(Light::LT_DIRECTIONAL);
+        m_main_light->setDirection(Ogre::Vector3(0.785, -0.423, 0.453).normalisedCopy());
 
-		main_light->setDiffuseColour(ambient_color);
-		main_light->setSpecularColour(ambient_color);
-	}
+        m_main_light->setDiffuseColour(m_def.ambient_color);
+        m_main_light->setSpecularColour(m_def.ambient_color);
+        m_main_light->setCastShadows(true);
+        m_main_light->setShadowFarDistance(1000.0f);
+        m_main_light->setShadowNearClipDistance(-1);
+    }
 }
 
 void TerrainManager::initFog()
 {
-	if (far_clip >= UNLIMITED_SIGHTRANGE)
-		gEnv->sceneManager->setFog(FOG_NONE);
-	else
-		gEnv->sceneManager->setFog(FOG_LINEAR, ambient_color, 0.000f, far_clip * 0.65f, far_clip*0.9);
+    if (m_sight_range >= UNLIMITED_SIGHTRANGE)
+        gEnv->sceneManager->setFog(FOG_NONE);
+    else
+        gEnv->sceneManager->setFog(FOG_LINEAR, m_def.ambient_color, 0.000f, m_sight_range * 0.65f, m_sight_range*0.9);
 }
 
 void TerrainManager::initVegetation()
 {
-	// get vegetation mode
-	String vegetationMode = SSETTING("Vegetation", "None (fastest)");
+    m_paged_mode = static_cast<int>(App::gfx_vegetation_mode.GetActive()); // TODO: don't cast enum to int!
 
-	paged_mode = 0;
-	paged_detail_factor = 0.0f;
-
-	if        (vegetationMode == "None (fastest)")
-	{
-		paged_mode = 0;
-		paged_detail_factor = 0.001f;
-	} else if (vegetationMode == "20%")
-	{
-		paged_mode = 1;
-		paged_detail_factor = 0.2f;
-	} else if (vegetationMode == "50%")
-	{
-		paged_mode = 2;
-		paged_detail_factor = 0.5f;
-	} else if (vegetationMode == "Full (best looking, slower)")
-	{
-		paged_mode = 3;
-		paged_detail_factor = 1.0f;
-	}
+    switch (m_paged_mode)
+    {
+    case 0:
+        m_paged_detail_factor = 0.001f;
+        break;
+    case 1:
+        m_paged_detail_factor = 0.2f;
+        break;
+    case 2:
+        m_paged_detail_factor = 0.5f;
+        break;
+    case 3:
+        m_paged_detail_factor = 1.0f;
+        break;
+    default:
+        m_paged_mode = 0;
+        m_paged_detail_factor = 0.0f;
+        break;
+    }
 }
 
 void TerrainManager::initHDR()
 {
-	Viewport *vp = gEnv->mainCamera->getViewport();
-	CompositorInstance *instance = CompositorManager::getSingleton().addCompositor(vp, "HDR", 0);
-	CompositorManager::getSingleton().setCompositorEnabled(vp, "HDR", true);
+    Viewport* vp = gEnv->mainCamera->getViewport();
+    CompositorInstance* instance = CompositorManager::getSingleton().addCompositor(vp, "HDR", 0);
+    CompositorManager::getSingleton().setCompositorEnabled(vp, "HDR", true);
 
-	// HDR needs a special listener
-	hdr_listener = new HDRListener();
-	instance->addListener(hdr_listener);
-	hdr_listener->notifyViewportSize(vp->getActualWidth(), vp->getActualHeight());
-	hdr_listener->notifyCompositor(instance);
+    // HDR needs a special listener
+    m_hdr_listener = new HDRListener();
+    instance->addListener(m_hdr_listener);
+    m_hdr_listener->notifyViewportSize(vp->getActualWidth(), vp->getActualHeight());
+    m_hdr_listener->notifyCompositor(instance);
 }
 
 void TerrainManager::initGlow()
 {
-	CompositorManager::getSingleton().addCompositor(gEnv->mainCamera->getViewport(), "Glow");
-	CompositorManager::getSingleton().setCompositorEnabled(gEnv->mainCamera->getViewport(), "Glow", true);
-	GlowMaterialListener *gml = new GlowMaterialListener();
-	MaterialManager::getSingleton().addListener(gml);
+    CompositorManager::getSingleton().addCompositor(gEnv->mainCamera->getViewport(), "Glow");
+    CompositorManager::getSingleton().setCompositorEnabled(gEnv->mainCamera->getViewport(), "Glow", true);
+    GlowMaterialListener* gml = new GlowMaterialListener();
+    MaterialManager::getSingleton().addListener(gml);
 }
 
 void TerrainManager::initMotionBlur()
 {
-	// Motion blur effect
-	CompositorPtr comp3 = CompositorManager::getSingleton().create("MotionBlur", ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-	{
-		CompositionTechnique *t = comp3->createTechnique();
-		{
-			CompositionTechnique::TextureDefinition *def = t->createTextureDefinition("scene");
-			def->width = 0;
-			def->height = 0;
-#if OGRE_VERSION>0x010602
-			def->formatList.push_back(PF_R8G8B8);
-#else
-			def->format = PF_R8G8B8;
-#endif //OGRE_VERSION
-		}
-		{
-			CompositionTechnique::TextureDefinition *def = t->createTextureDefinition("sum");
-			def->width = 0;
-			def->height = 0;
-#if OGRE_VERSION>0x010602
-			def->formatList.push_back(PF_R8G8B8);
-#else
-			def->format = PF_R8G8B8;
-#endif //OGRE_VERSION
-		}
-		{
-			CompositionTechnique::TextureDefinition *def = t->createTextureDefinition("temp");
-			def->width = 0;
-			def->height = 0;
-#if OGRE_VERSION>0x010602
-			def->formatList.push_back(PF_R8G8B8);
-#else
-			def->format = PF_R8G8B8;
-#endif //OGRE_VERSION
-		}
-		// Render scene
-		{
-			CompositionTargetPass *tp = t->createTargetPass();
-			tp->setInputMode(CompositionTargetPass::IM_PREVIOUS);
-			tp->setOutputName("scene");
-		}
-		// Initialization pass for sum texture
-		{
-			CompositionTargetPass *tp = t->createTargetPass();
-			tp->setInputMode(CompositionTargetPass::IM_PREVIOUS);
-			tp->setOutputName("sum");
-			tp->setOnlyInitial(true);
-		}
-		// Do the motion blur
-		{
-			CompositionTargetPass *tp = t->createTargetPass();
-			tp->setInputMode(CompositionTargetPass::IM_NONE);
-			tp->setOutputName("temp");
-			{
-				CompositionPass *pass = tp->createPass();
-				pass->setType(CompositionPass::PT_RENDERQUAD);
-				pass->setMaterialName("Compositor/Combine");
-				pass->setInput(0, "scene");
-				pass->setInput(1, "sum");
-			}
-		}
-		// Copy back sum texture
-		{
-			CompositionTargetPass *tp = t->createTargetPass();
-			tp->setInputMode(CompositionTargetPass::IM_NONE);
-			tp->setOutputName("sum");
-			{
-				CompositionPass *pass = tp->createPass();
-				pass->setType(CompositionPass::PT_RENDERQUAD);
-				pass->setMaterialName("Compositor/Copyback");
-				pass->setInput(0, "temp");
-			}
-		}
-		// Display result
-		{
-			CompositionTargetPass *tp = t->getOutputTargetPass();
-			tp->setInputMode(CompositionTargetPass::IM_NONE);
-			{
-				CompositionPass *pass = tp->createPass();
-				pass->setType(CompositionPass::PT_RENDERQUAD);
-				pass->setMaterialName("Compositor/MotionBlur");
-				pass->setInput(0, "sum");
-			}
-		}
-	}
-	CompositorManager::getSingleton().addCompositor(gEnv->mainCamera->getViewport(),"MotionBlur");
-	CompositorManager::getSingleton().setCompositorEnabled(gEnv->mainCamera->getViewport(), "MotionBlur", true);
+    // Motion blur effect taken from Ogre 1.8 Compositor demos
+    Ogre::CompositorPtr comp3 = Ogre::CompositorManager::getSingleton().create("MotionBlur", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    {
+        Ogre::CompositionTechnique* t = comp3->createTechnique();
+        {
+            Ogre::CompositionTechnique::TextureDefinition* def = t->createTextureDefinition("scene");
+            def->width = 0;
+            def->height = 0;
+            def->formatList.push_back(Ogre::PF_R8G8B8);
+        }
+        {
+            Ogre::CompositionTechnique::TextureDefinition* def = t->createTextureDefinition("sum");
+            def->width = 0;
+            def->height = 0;
+            def->formatList.push_back(Ogre::PF_R8G8B8);
+        }
+        {
+            Ogre::CompositionTechnique::TextureDefinition* def = t->createTextureDefinition("temp");
+            def->width = 0;
+            def->height = 0;
+            def->formatList.push_back(Ogre::PF_R8G8B8);
+        }
+        /// Render scene
+        {
+            Ogre::CompositionTargetPass* tp = t->createTargetPass();
+            tp->setInputMode(Ogre::CompositionTargetPass::IM_PREVIOUS);
+            tp->setOutputName("scene");
+        }
+        /// Initialisation pass for sum texture
+        {
+            Ogre::CompositionTargetPass* tp = t->createTargetPass();
+            tp->setInputMode(Ogre::CompositionTargetPass::IM_PREVIOUS);
+            tp->setOutputName("sum");
+            tp->setOnlyInitial(true);
+        }
+        /// Do the motion blur
+        {
+            Ogre::CompositionTargetPass* tp = t->createTargetPass();
+            tp->setInputMode(Ogre::CompositionTargetPass::IM_NONE);
+            tp->setOutputName("temp");
+            {
+                Ogre::CompositionPass* pass = tp->createPass();
+                pass->setType(Ogre::CompositionPass::PT_RENDERQUAD);
+                pass->setMaterialName("Ogre/Compositor/Combine");
+                pass->setInput(0, "scene");
+                pass->setInput(1, "sum");
+            }
+        }
+        /// Copy back sum texture
+        {
+            Ogre::CompositionTargetPass* tp = t->createTargetPass();
+            tp->setInputMode(Ogre::CompositionTargetPass::IM_NONE);
+            tp->setOutputName("sum");
+            {
+                Ogre::CompositionPass* pass = tp->createPass();
+                pass->setType(Ogre::CompositionPass::PT_RENDERQUAD);
+                pass->setMaterialName("Ogre/Compositor/Copyback");
+                pass->setInput(0, "temp");
+            }
+        }
+        /// Display result
+        {
+            Ogre::CompositionTargetPass* tp = t->getOutputTargetPass();
+            tp->setInputMode(Ogre::CompositionTargetPass::IM_NONE);
+            {
+                Ogre::CompositionPass* pass = tp->createPass();
+                pass->setType(Ogre::CompositionPass::PT_RENDERQUAD);
+                pass->setMaterialName("Ogre/Compositor/MotionBlur");
+                pass->setInput(0, "sum");
+            }
+        }
+    }
+
+    Ogre::CompositorManager::getSingleton().addCompositor(gEnv->mainCamera->getViewport(), "MotionBlur");
+    Ogre::CompositorManager::getSingleton().setCompositorEnabled(gEnv->mainCamera->getViewport(), "MotionBlur", true);
 }
 
 void TerrainManager::initSunburn()
 {
-	CompositorManager::getSingleton().addCompositor(gEnv->mainCamera->getViewport(),"Sunburn");
-	CompositorManager::getSingleton().setCompositorEnabled(gEnv->mainCamera->getViewport(), "Sunburn", true);
+    CompositorManager::getSingleton().addCompositor(gEnv->mainCamera->getViewport(), "Sunburn");
+    CompositorManager::getSingleton().setCompositorEnabled(gEnv->mainCamera->getViewport(), "Sunburn", true);
 }
 
 void TerrainManager::fixCompositorClearColor()
 {
-	// hack
-	// now with extensive error checking
-	if (CompositorManager::getSingleton().hasCompositorChain(gEnv->mainCamera->getViewport()))
-	{
-		//	//CompositorManager::getSingleton().getCompositorChain(gEnv->ogreCamera->getViewport())->getCompositor(0)->getTechnique()->getOutputTargetPass()->getPass(0)->setClearColour(fade_color);
-		CompositorInstance *co = CompositorManager::getSingleton().getCompositorChain(gEnv->mainCamera->getViewport())->_getOriginalSceneCompositor();
-		if (co)
-		{
-			CompositionTechnique *ct = co->getTechnique();
-			if (ct)
-			{
-				CompositionTargetPass *ctp = ct->getOutputTargetPass();
-				if (ctp)
-				{
-					CompositionPass *p = ctp->getPass(0);
-					if (p)
-					{
-						p->setClearColour(fade_color);
-					}
-				}
-			}
-		}
-	}
+    // hack
+    // now with extensive error checking
+    if (CompositorManager::getSingleton().hasCompositorChain(gEnv->mainCamera->getViewport()))
+    {
+        CompositorInstance* co = CompositorManager::getSingleton().getCompositorChain(gEnv->mainCamera->getViewport())->_getOriginalSceneCompositor();
+        if (co)
+        {
+            CompositionTechnique* ct = co->getTechnique();
+            if (ct)
+            {
+                CompositionTargetPass* ctp = ct->getOutputTargetPass();
+                if (ctp)
+                {
+                    CompositionPass* p = ctp->getPass(0);
+                    if (p)
+                    {
+                        p->setClearColour(Ogre::ColourValue::Black);
+                    }
+                }
+            }
+        }
+    }
 }
 
 void TerrainManager::initWater()
 {
-	String waterSettingsString = SSETTING("Water effects", "Hydrax");
+    // disabled in global config
+    if (App::gfx_water_mode.GetActive() == GfxWaterMode::NONE)
+        return;
 
-	// disabled in global config
-	if (waterSettingsString == "None") return;
-	// disabled in map config
-	if (!StringConverter::parseBool(m_terrain_config.getSetting("Water", "General"))) return;
+    // disabled in map config
+    if (!m_def.has_water)
+    {
+        return;
+    }
 
-	if (waterSettingsString == "Hydrax")
-	{
-		// try to load hydrax config
-		String hydraxConfig = m_terrain_config.getSetting("HydraxConfigFile", "General");
+    if (App::gfx_water_mode.GetActive() == GfxWaterMode::HYDRAX)
+    {
+        // try to load hydrax config
+        if (!m_def.hydrax_conf_file.empty() && ResourceGroupManager::getSingleton().resourceExistsInAnyGroup(m_def.hydrax_conf_file))
+        {
+            m_hydrax_water = new HydraxWater(m_def.water_height, m_def.hydrax_conf_file);
+        }
+        else
+        {
+            // no config provided, fall back to the default one
+            m_hydrax_water = new HydraxWater(m_def.water_height);
+        }
 
-		if (!hydraxConfig.empty() && ResourceGroupManager::getSingleton().resourceExistsInAnyGroup(hydraxConfig))
-		{
-			hw = new HydraxWater(m_terrain_config, hydraxConfig);
-		}
-		else
-		{
-			// no config provided, fall back to the default one
-			hw = new HydraxWater(m_terrain_config);
-		}
+        m_water = m_hydrax_water;
 
-		
-		water = hw;
+        //Apply depth technique to the terrain
+        TerrainGroup::TerrainIterator ti = m_geometry_manager->getTerrainGroup()->getTerrainIterator();
+        while (ti.hasMoreElements())
+        {
+            Terrain* t = ti.getNext()->instance;
+            MaterialPtr ptr = t->getMaterial();
+            m_hydrax_water->GetHydrax()->getMaterialManager()->addDepthTechnique(ptr->createTechnique());
+        }
+    }
+    else
+    {
+        if (m_water == nullptr)
+           m_water = new Water();
+        else if (m_water != nullptr)
+        {
+            delete(m_water);
+            m_water = new Water();
+        }
 
-		//Apply depth technique to the terrain
-		TerrainGroup::TerrainIterator ti = geometry_manager->getTerrainGroup()->getTerrainIterator();
-		while (ti.hasMoreElements())
-		{
-			Terrain* t = ti.getNext()->instance;
-			MaterialPtr ptr = t->getMaterial();
-			hw->GetHydrax()->getMaterialManager()->addDepthTechnique(ptr->createTechnique());
-		}
-
-	} else
-	{
-		if (water == nullptr)
-			water = new Water(m_terrain_config);
-		else if (water != nullptr)
-		{
-			delete(water);
-			water = new Water(m_terrain_config);
-		}
-	}
-}
-
-void TerrainManager::initEnvironmentMap()
-{
-	envmap = new Envmap();
+        m_water->SetStaticWaterHeight(m_def.water_height);
+    }
 }
 
 void TerrainManager::initDashboards()
 {
-	dashboard = new Dashboard();
+    m_dashboard = new Dashboard();
 }
 
 void TerrainManager::initShadows()
 {
-	shadow_manager = new ShadowManager();
-	shadow_manager->loadConfiguration();
+    m_shadow_manager = new ShadowManager();
+    m_shadow_manager->loadConfiguration();
 }
 
 void TerrainManager::loadTerrainObjects()
 {
-	try
-	{
-		ConfigFile::SettingsIterator objectsIterator = m_terrain_config.getSettingsIterator("Objects");
+    for (std::string tobj_filename : m_def.tobj_files)
+    {
+        m_object_manager->LoadTObjFile(tobj_filename);
+    }
 
-		while (objectsIterator.hasMoreElements())
-		{
-			String sname = objectsIterator.peekNextKey();
-			StringUtil::trim(sname);
-
-			object_manager->loadObjectConfigFile(sname);
-			objectsIterator.moveNext();
-		}
-	} catch(...)
-	{
-		// no objects found
-	}
-
-	// bakes the geometry and things
-	object_manager->postLoad();
-}
-
-void TerrainManager::initCollisions()
-{
-	collisions = new Collisions();
-	gEnv->collisions = collisions;
+    m_object_manager->PostLoadTerrain(); // bakes the geometry and things
 }
 
 void TerrainManager::initTerrainCollisions()
 {
-	String tractionMapConfig = m_terrain_config.getSetting("TractionMap", "General");
-	if (!tractionMapConfig.empty())
-	{
-		gEnv->collisions->setupLandUse(tractionMapConfig.c_str());
-	}
+    if (!m_def.traction_map_file.empty())
+    {
+        m_collisions->setupLandUse(m_def.traction_map_file.c_str());
+    }
 }
 
 bool TerrainManager::update(float dt)
 {
-	if (object_manager)
-		object_manager->update(dt);
+    if (m_object_manager)
+        m_object_manager->UpdateTerrainObjects(dt);
 
-	if (geometry_manager)
-		geometry_manager->update(dt);
+    if (m_geometry_manager)
+        m_geometry_manager->UpdateMainLightPosition(); // TODO: Is this necessary? I'm leaving it here just in case ~ only_a_ptr, 04/2017
 
-	return true;
+    return true;
 }
 
 void TerrainManager::initScripting()
 {
 #ifdef USE_ANGELSCRIPT
-	bool loaded = false;
+    bool loaded = false;
 
-	// only load terrain scripts while not in multiplayer
-	if (!gEnv->network)
-	{
-		try
-		{
-			ConfigFile::SettingsIterator objectsIterator = m_terrain_config.getSettingsIterator("Scripts");
-			while (objectsIterator.hasMoreElements())
-			{
-				String sname = objectsIterator.peekNextKey();
-				StringUtil::trim(sname);
-				String svalue = objectsIterator.getNext();
-				StringUtil::trim(svalue);
+    // only load terrain scripts while not in multiplayer
+    if (RoR::App::mp_state.GetActive() != RoR::MpState::CONNECTED)
+    {
+        for (std::string as_filename : m_def.as_files)
+        {
+            if (ScriptEngine::getSingleton().loadScript(as_filename) == 0)
+                loaded = true;
+        }
+    }
 
-				if(!ScriptEngine::getSingleton().loadScript(sname))
-					loaded = true;
-			}
-		} catch(...)
-		{
-			// simply no script section
-			//LOG("Exception while trying load script: " + e.getFullDescription());
-		}
-	}
-	
-	if (!loaded)
-	{
-		// load a default script that does the most basic things
-		ScriptEngine::getSingleton().loadScript("default.as");
-	}
-	// finally activate AS logging, so we dont spam the users screen with initialization messages
-	ScriptEngine::getSingleton().activateLogging();
+    if (!loaded)
+    {
+        // load a default script that does the most basic things
+        ScriptEngine::getSingleton().loadScript("default.as");
+    }
+    // finally activate AS logging, so we dont spam the users screen with initialization messages
+    ScriptEngine::getSingleton().activateLogging();
 #endif //USE_ANGELSCRIPT
 }
 
 void TerrainManager::setGravity(float value)
 {
-	gravity = value;
-	BeamFactory::getSingleton().recalcGravityMasses();
-}
-
-void TerrainManager::initSurveyMap()
-{
-	survey_map = new SurveyMapManager();
-
-	// Uses the terrain composite material as survey map background image
-#if 0
-	if (geometry_manager)
-		survey_map->setMapTexture(geometry_manager->getCompositeMaterialName());
-#endif
-}
-
-void TerrainManager::initGeometry()
-{
-	geometry_manager = new TerrainGeometryManager(this);
+    m_cur_gravity = value;
+    App::GetSimController()->GetBeamFactory()->RecalcGravityMasses();
 }
 
 void TerrainManager::initObjects()
 {
-	object_manager = new TerrainObjectManager(this);
+    m_object_manager = new TerrainObjectManager(this);
 }
 
 Ogre::Vector3 TerrainManager::getMaxTerrainSize()
 {
-	if (!geometry_manager)
-		return Vector3::ZERO;
-	return geometry_manager->getMaxTerrainSize();
+    if (!m_geometry_manager)
+        return Vector3::ZERO;
+    return m_geometry_manager->getMaxTerrainSize();
 }
 
-IHeightFinder* TerrainManager::getHeightFinder()
+float TerrainManager::GetHeightAt(float x, float z)
 {
-	return geometry_manager;
+    return m_geometry_manager->getHeightAt(x, z);
 }
 
-size_t TerrainManager::getMemoryUsage()
+Ogre::Vector3 TerrainManager::GetNormalAt(float x, float y, float z)
 {
-	// TODO: FIX
-	return 0;
+    return m_geometry_manager->getNormalAt(x, y, z);
 }
 
-void TerrainManager::freeResources()
+SkyManager* TerrainManager::getSkyManager()
 {
-	// TODO
+    return m_sky_manager;
 }
 
-void TerrainManager::loadPreloadedTrucks()
+void TerrainManager::LoadPredefinedActors()
 {
-	if (object_manager)
-		object_manager->loadPreloadedTrucks();
+    if (m_object_manager)
+        m_object_manager->LoadPredefinedActors();
 }
 
-bool TerrainManager::hasPreloadedTrucks()
+bool TerrainManager::HasPredefinedActors()
 {
-	if (object_manager)
-		return object_manager->hasPreloadedTrucks();
-	return false;
+    if (m_object_manager)
+        return m_object_manager->HasPredefinedActors();
+    return false;
 }
 
-std::vector<authorinfo_t> & TerrainManager::GetAuthors()
+std::string TerrainManager::GetMinimapTextureName()
 {
-	return authors; 
+    if (m_survey_map != nullptr) // Can be disabled by user
+        return m_survey_map->GetMinimapTextureName();
+    else
+        return "";
 }
+

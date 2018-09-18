@@ -1,36 +1,28 @@
 /*
-This source file is part of Rigs of Rods
-Copyright 2005-2012 Pierre-Michel Ricordel
-Copyright 2007-2012 Thomas Fischer
+    This source file is part of Rigs of Rods
+    Copyright 2005-2012 Pierre-Michel Ricordel
+    Copyright 2007-2012 Thomas Fischer
 
-For more information, see http://www.rigsofrods.com/
+    For more information, see http://www.rigsofrods.org/
 
-Rigs of Rods is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License version 3, as
-published by the Free Software Foundation.
+    Rigs of Rods is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License version 3, as
+    published by the Free Software Foundation.
 
-Rigs of Rods is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
+    Rigs of Rods is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+    GNU General Public License for more details.
 
-You should have received a copy of the GNU General Public License
-along with Rigs of Rods.  If not, see <http://www.gnu.org/licenses/>.
+    You should have received a copy of the GNU General Public License
+    along with Rigs of Rods. If not, see <http://www.gnu.org/licenses/>.
 */
+
 #include "RoRFrameListener.h"
-
-#include <OgreFontManager.h>
-
-#include <OgreRTShaderSystem.h>
-#include <OgreTerrain.h>
-#include <OgreTerrainMaterialGeneratorA.h>
-#include <OgreTerrainPaging.h>
-#include <OgreTerrainQuadTreeNode.h>
 
 #include "AdvancedScreen.h"
 #include "AircraftSimulation.h"
 #include "Application.h"
-#include "AutoPilot.h"
 #include "Beam.h"
 #include "BeamEngine.h"
 #include "BeamFactory.h"
@@ -39,72 +31,63 @@ along with Rigs of Rods.  If not, see <http://www.gnu.org/licenses/>.
 #include "Character.h"
 #include "CharacterFactory.h"
 #include "ChatSystem.h"
-#include "Collisions.h"
 #include "CollisionTools.h"
-#include "Dashboard.h"
+#include "Collisions.h"
+#include "ContentManager.h"
 #include "DashBoardManager.h"
 #include "DepthOfFieldEffect.h"
 #include "DustManager.h"
 #include "EnvironmentMap.h"
-#include "ErrorUtils.h"
-#include "FlexAirfoil.h"
 #include "ForceFeedback.h"
-#include "GlowMaterialListener.h"
-#include "HDRListener.h"
+#include "GUI_LoadingWindow.h"
+#include "GUI_TeleportWindow.h"
+#include "GUI_TopMenubar.h"
+#include "GUIManager.h"
 #include "Heathaze.h"
-#include "IHeightFinder.h"
-#include "InputEngine.h"
 #include "IWater.h"
+#include "InputEngine.h"
 #include "LandVehicleSimulation.h"
 #include "Language.h"
-#include "MainThread.h"
-#include "MeshObject.h"
+#include "MainMenu.h"
+
 #include "MumbleIntegration.h"
-#include "Network.h"
 #include "OgreSubsystem.h"
 #include "OutProtocol.h"
 #include "OverlayWrapper.h"
 #include "PlatformUtils.h"
-#include "PlayerColours.h"
-#include "PreviewRenderer.h"
 #include "Replay.h"
-#include "Road.h"
-#include "Road2.h"
 #include "RoRVersion.h"
 #include "SceneMouse.h"
-#include "ScopeLog.h"
 #include "ScrewProp.h"
 #include "Scripting.h"
 #include "Settings.h"
-#include "ShadowManager.h"
 #include "SkyManager.h"
 #include "SoundScriptManager.h"
 #include "TerrainManager.h"
-#include "TruckHUD.h"
-#include "TurboProp.h"
+#include "TerrainObjectManager.h"
 #include "Utils.h"
-#include "VideoCamera.h"
 #include "Water.h"
-#include "WriteTextToTexture.h"
 
-#ifdef USE_MYGUI
 #include "GUIManager.h"
-#include "GUIMenu.h"
-#include "GUIFriction.h"
-#include "GUIMp.h"
-#include "LoadingWindow.h"
-#include "Console.h"
+#include "GUI_GameConsole.h"
+#include "GUI_FrictionSettings.h"
+#include "GUI_MultiplayerClientList.h"
+#include "GUI_MainSelector.h"
+#include "GUI_SimUtils.h"
+
 #include "SurveyMapManager.h"
 #include "SurveyMapEntity.h"
-#endif //USE_MYGUI
+
+#include <ctime>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
+#include <limits>
+#include <sstream>
 
 #ifdef USE_MPLATFORM
 #include "MPlatformFD.h"
 #endif //USE_MPLATFORM
-
-#ifdef FEAT_TIMING
-#include "BeamStats.h"
-#endif //FEAT_TIMING
 
 #if OGRE_PLATFORM == OGRE_PLATFORM_WIN32
 #include <Windows.h>
@@ -125,1727 +108,2380 @@ along with Rigs of Rods.  If not, see <http://www.gnu.org/licenses/>.
 using namespace Ogre;
 using namespace RoR;
 
-void RoRFrameListener::updateIO(float dt)
+#define simRUNNING(_S_) (_S_ == SimState::RUNNING    )
+#define  simPAUSED(_S_) (_S_ == SimState::PAUSED     )
+#define  simSELECT(_S_) (_S_ == SimState::SELECTING  )
+#define  simEDITOR(_S_) (_S_ == SimState::EDITOR_MODE)
+
+SimController::SimController(RoR::ForceFeedback* ff, RoR::SkidmarkConfig* skid_conf) :
+    m_player_actor(nullptr),
+    m_prev_player_actor(nullptr),
+    m_actor_manager(),
+    m_character_factory(),
+    m_dir_arrow_pointed(Vector3::ZERO),
+    m_heathaze(nullptr),
+    m_force_feedback(ff),
+    m_skidmark_conf(skid_conf),
+    m_hide_gui(false),
+    m_was_app_window_closed(false),
+    m_is_dir_arrow_visible(false),
+    m_is_pace_reset_pressed(false),
+    m_last_cache_selection(nullptr),
+    m_last_screenshot_date(""),
+    m_last_screenshot_id(1),
+    m_last_simulation_speed(0.1f),
+    m_last_skin_selection(nullptr),
+    m_netcheck_gui_timer(0.0f),
+    m_pressure_pressed(false),
+    m_race_bestlap_time(0),
+    m_race_in_progress(false),
+    m_race_start_time(0),
+    m_reload_box(0),
+    m_reload_dir(Quaternion::IDENTITY),
+    m_reload_pos(Vector3::ZERO),
+    m_stats_on(0),
+    m_time(0),
+    m_time_until_next_toggle(0),
+    m_advanced_vehicle_repair(false),
+    m_advanced_vehicle_repair_timer(0.f),
+    m_actor_info_gui_visible(false)
 {
-	Beam *current_truck = BeamFactory::getSingleton().getCurrentTruck();
-	if (current_truck && current_truck->driveable == TRUCK)
-	{
-
-
-		// force feedback
-		if (forcefeedback)
-		{
-			int cameranodepos = 0;
-			int cameranodedir = 0;
-			int cameranoderoll = 0;
-
-			if (current_truck->cameranodepos[0] >= 0 && current_truck->cameranodepos[0] < MAX_NODES)
-				cameranodepos = current_truck->cameranodepos[0];
-			if (current_truck->cameranodedir[0] >= 0 && current_truck->cameranodedir[0] < MAX_NODES)
-				cameranodedir = current_truck->cameranodedir[0];
-			if (current_truck->cameranoderoll[0] >= 0 && current_truck->cameranoderoll[0] < MAX_NODES)
-				cameranoderoll = current_truck->cameranoderoll[0];
-
-			Vector3 udir = current_truck->nodes[cameranodepos].RelPosition-current_truck->nodes[cameranodedir].RelPosition;
-			Vector3 uroll = current_truck->nodes[cameranodepos].RelPosition-current_truck->nodes[cameranoderoll].RelPosition;
-			
-			udir.normalise();
-			uroll.normalise();
-
-			forcefeedback->setForces(-current_truck->ffforce.dotProduct(uroll)/10000.0,
-				current_truck->ffforce.dotProduct(udir)/10000.0,
-				current_truck->WheelSpeed,
-				current_truck->hydrodircommand,
-				current_truck->ffhydro);
-		}
-	}
 }
 
-RoRFrameListener::RoRFrameListener() :
-	clutch(0),
-	dashboard(0),
-	dof(0),
-	forcefeedback(0),
-	freeTruckPosition(false),
-	heathaze(0),
-	hidegui(false),
-	loading_state(NONE_LOADED),
-	mStatsOn(0),
-	mTimeUntilNextToggle(0),
-	mTruckInfoOn(false),
-	netChat(0),
-	netPointToUID(-1),
-	netcheckGUITimer(0),
-	persostart(Vector3(0,0,0)),
-	pressure_pressed(false),
-	raceStartTime(-1),
-	reload_box(0),
-	rtime(0),
-	isSimPaused(false)
+void SimController::UpdateForceFeedback(float dt)
 {
+    if (!App::io_ffb_enabled.GetActive()) { return; }
 
+    if (!RoR::App::GetInputEngine()->getForceFeedbackDevice())
+    {
+         // TODO: <rant> Per-frame check? How about on-session-start check? </rant> ~only_a_ptr, 02/2017
+        LOG("No force feedback device detected, disabling force feedback");
+        App::io_ffb_enabled.SetActive(false);
+        return;
+    }
+
+    if (m_player_actor && m_player_actor->ar_driveable == TRUCK)
+    {
+        int ar_camera_node_pos = 0;
+        int ar_camera_node_dir = 0;
+        int ar_camera_node_roll = 0;
+
+        // TODO: <rant> Per-frame validity check? How about on-spawn check? </rant>
+        // If the camera node is invalid, the FF should be disabled right away, not try to fall back to node0
+        // TODO: Check cam. nodes once on spawn! They never change --> no reason to repeat the check. ~only_a_ptr, 06/2017
+                // ~only_a_ptr, 02/2017
+        if (m_player_actor->IsNodeIdValid(m_player_actor->ar_camera_node_pos[0]))
+            ar_camera_node_pos = m_player_actor->ar_camera_node_pos[0];
+        if (m_player_actor->IsNodeIdValid(m_player_actor->ar_camera_node_dir[0]))
+            ar_camera_node_dir = m_player_actor->ar_camera_node_dir[0];
+        if (m_player_actor->IsNodeIdValid(m_player_actor->ar_camera_node_roll[0]))
+            ar_camera_node_roll = m_player_actor->ar_camera_node_roll[0];
+
+        Vector3 udir = m_player_actor->ar_nodes[ar_camera_node_pos].RelPosition - m_player_actor->ar_nodes[ar_camera_node_dir].RelPosition;
+        Vector3 uroll = m_player_actor->ar_nodes[ar_camera_node_pos].RelPosition - m_player_actor->ar_nodes[ar_camera_node_roll].RelPosition;
+
+        udir.normalise();
+        uroll.normalise();
+
+        Ogre::Vector3 ff_vehicle = m_player_actor->GetFFbBodyForces();
+        m_force_feedback->SetForces(
+            -ff_vehicle.dotProduct(uroll) / 10000.0,
+             ff_vehicle.dotProduct(udir)  / 10000.0,
+            m_player_actor->ar_wheel_speed,
+            m_player_actor->ar_hydro_dir_command,
+            m_player_actor->GetFFbHydroForces());
+    }
 }
 
-RoRFrameListener::~RoRFrameListener()
+void SimController::StartRaceTimer()
 {
-
+    m_race_start_time = (int)m_time;
+    m_race_in_progress = true;
+    OverlayWrapper* ow = RoR::App::GetOverlayWrapper();
+    if (ow)
+    {
+        ow->ShowRacingOverlay();
+        ow->laptimes->show();
+        ow->laptimems->show();
+        ow->laptimemin->show();
+    }
 }
 
-void RoRFrameListener::StartRaceTimer()
+float SimController::StopRaceTimer()
 {
-	m_race_start_time = (int)rtime;
-	m_race_in_progress = true;
-	OverlayWrapper* ow = RoR::Application::GetOverlayWrapper();
-	if (ow)
-	{
-		ow->ShowRacingOverlay();
-		ow->laptimes->show();
-		ow->laptimems->show();
-		ow->laptimemin->show();
-	}
+    float time;
+
+    if (m_race_in_progress)
+    {
+        time = static_cast<float>(m_time - m_race_start_time);
+        m_race_bestlap_time = time;
+    }
+
+    // let the display on
+    OverlayWrapper* ow = RoR::App::GetOverlayWrapper();
+    if (ow)
+    {
+        wchar_t txt[256] = L"";
+        UTFString fmt = _L("Last lap: %.2i'%.2i.%.2i");
+        swprintf(txt, 256, fmt.asWStr_c_str(), ((int)(m_race_bestlap_time)) / 60, ((int)(m_race_bestlap_time)) % 60, ((int)(m_race_bestlap_time * 100.0)) % 100);
+        ow->lasttime->setCaption(UTFString(txt));
+        //ow->m_racing_overlay->hide();
+        ow->laptimes->hide();
+        ow->laptimems->hide();
+        ow->laptimemin->hide();
+    }
+    m_race_start_time = 0;
+    m_race_in_progress = false;
+    return m_race_bestlap_time;
 }
 
-float RoRFrameListener::StopRaceTimer()
+void SimController::UpdateRacingGui()
 {
-	float time;
-
-	if (m_race_in_progress)
-	{
-		time = static_cast<float>(rtime - m_race_start_time);
-		m_race_bestlap_time = time;
-	}
-
-	// let the display on
-	OverlayWrapper* ow = RoR::Application::GetOverlayWrapper();
-	if (ow)
-	{
-		wchar_t txt[256] = L"";
-		UTFString fmt = _L("Last lap: %.2i'%.2i.%.2i");
-		swprintf(txt, 256, fmt.asWStr_c_str(), ((int)(m_race_bestlap_time)) / 60, ((int)(m_race_bestlap_time)) % 60, ((int)(m_race_bestlap_time*100.0)) % 100);
-		ow->lasttime->setCaption(UTFString(txt));
-		//ow->m_racing_overlay->hide();
-		ow->laptimes->hide();
-		ow->laptimems->hide();
-		ow->laptimemin->hide();
-	}
-	m_race_start_time = 0;
-	m_race_in_progress = false;
-	return m_race_bestlap_time;
+    OverlayWrapper* ow = RoR::App::GetOverlayWrapper();
+    if (!ow)
+        return;
+    // update m_racing_overlay gui if required
+    float time = static_cast<float>(m_time - m_race_start_time);
+    wchar_t txt[10];
+    swprintf(txt, 10, L"%.2i", ((int)(time * 100.0)) % 100);
+    ow->laptimems->setCaption(txt);
+    swprintf(txt, 10, L"%.2i", ((int)(time)) % 60);
+    ow->laptimes->setCaption(txt);
+    swprintf(txt, 10, L"%.2i'", ((int)(time)) / 60);
+    ow->laptimemin->setCaption(UTFString(txt));
 }
 
-void RoRFrameListener::UpdateRacingGui()
+bool SimController::UpdateInputEvents(float dt)
 {
-	OverlayWrapper* ow = RoR::Application::GetOverlayWrapper();
-	if (!ow) return;
-	// update m_racing_overlay gui if required
-	float time = static_cast<float>(rtime - m_race_start_time);
-	wchar_t txt[10];
-	swprintf(txt, 10, L"%.2i", ((int)(time*100.0)) % 100);
-	ow->laptimems->setCaption(txt);
-	swprintf(txt, 10, L"%.2i", ((int)(time)) % 60);
-	ow->laptimes->setCaption(txt);
-	swprintf(txt, 10, L"%.2i'", ((int)(time)) / 60);
-	ow->laptimemin->setCaption(UTFString(txt));
-}
+    if (dt == 0.0f)
+        return true;
 
-bool RoRFrameListener::updateEvents(float dt)
-{
-	if (dt==0.0f) return true;
+    auto s = App::sim_state.GetActive();
+    auto gui_man = App::GetGuiManager();
 
-	RoR::Application::GetInputEngine()->updateKeyBounces(dt);
-	if (!RoR::Application::GetInputEngine()->getInputsChanged()) return true;
+    RoR::App::GetInputEngine()->updateKeyBounces(dt);
+    if (!RoR::App::GetInputEngine()->getInputsChanged())
+        return true;
 
-	bool dirty = false;
+    // update overlays if enabled
+    if (RoR::App::GetOverlayWrapper())
+        RoR::App::GetOverlayWrapper()->update(dt);
 
-	//update joystick readings
-	//	joy->UpdateInputState();
+    if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_QUIT_GAME))
+    {
+        if (gui_man->IsVisible_MainSelector())
+        {
+            gui_man->GetMainSelector()->Cancel();
+        }
+        else if (simRUNNING(s))
+        {
+            App::sim_state.SetPending(SimState::PAUSED);
+        }
+        else if (simPAUSED(s))
+        {
+            App::sim_state.SetPending(SimState::RUNNING);
+        }
+    }
 
-	//stick shift general uglyness
-	/*
-	// no more stickshift, commented out when upgrading to the inputengine
-	if (loading_state==ALL_LOADED && current_truck!=-1 && trucks[current_truck]->driveable==TRUCK && trucks[current_truck]->engine->getAutoMode()==MANUAL)
-	{
-		int gb;
-		gb=joy->updateStickShift(true, trucks[current_truck]->engine->getClutch());
-		// TODO: FIXME
-		//if (gb!=-1) trucks[current_truck]->engine->setGear(gb);
-	}
-	else joy->updateStickShift(false, 0.0);
-	*/
+    if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_CONSOLE_TOGGLE))
+    {
+        gui_man->SetVisible_Console(! gui_man->IsVisible_Console());
+    }
 
-	// update overlays if enabled
-	if (RoR::Application::GetOverlayWrapper()) RoR::Application::GetOverlayWrapper()->update(dt);
+    if ((m_player_actor == nullptr) && RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_TELEPORT_TOGGLE))
+    {
+        gui_man->SetVisible_TeleportWindow(! gui_man->IsVisible_TeleportWindow());
+    }
 
-	Beam *curr_truck = BeamFactory::getSingleton().getCurrentTruck();
+    if (App::sim_state.GetActive() == SimState::PAUSED)
+        return true; //Stop everything when pause menu is visible
 
+    if (gui_man->IsVisible_FrictionSettings() && m_player_actor)
+    {
+        ground_model_t* gm = m_player_actor->getLastFuzzyGroundModel();
 
-	if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_QUIT_GAME))
-	{
-		//shutdown_final();
-		Application::GetGuiManager()->TogglePauseMenu();
-	}
+        gui_man->GetFrictionSettings()->setActiveCol(gm);
+    }
 
-	if (Application::GetGuiManager()->GetPauseMenuVisible()) return true; //Stop everything when pause menu is visible
+    const bool mp_connected = (App::mp_state.GetActive() == MpState::CONNECTED);
+    if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_ENTER_CHATMODE, 0.5f) && !m_hide_gui && mp_connected)
+    {
+        RoR::App::GetInputEngine()->resetKeys();
+        gui_man->SetVisible_ChatBox(true);
+    }
 
-#ifdef USE_MYGUI
-	if (GUI_Friction::getSingletonPtr() && GUI_Friction::getSingleton().getVisible() && curr_truck)
-	{
-		// friction GUI active
-		ground_model_t *gm = curr_truck->getLastFuzzyGroundModel();
-		if (gm)
-			GUI_Friction::getSingleton().setActiveCol(gm);
-	}
-#endif //USE_MYGUI
+    if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_SCREENSHOT, 0.25f))
+    {
+        std::time_t t = std::time(nullptr);
+        std::stringstream date;
+#if defined(__GNUC__) && (__GNUC__ < 5)
+		date << std::asctime(std::localtime(&t));
+#else
+        date << std::put_time(std::localtime(&t), "%Y-%m-%d_%H-%M-%S");
+#endif
 
-#ifdef USE_MYGUI
-	if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_ENTER_CHATMODE, 0.5f) && !hidegui && gEnv->network)
-	{
-		RoR::Application::GetInputEngine()->resetKeys();
-		RoR::Application::GetGuiManager()->ShowChatBox();
-	}
-#endif //USE_MYGUI
-	// update characters
-	if (loading_state==ALL_LOADED && gEnv->network)
-	{
-		CharacterFactory::getSingleton().updateCharacters(dt);
-	} else if (loading_state==ALL_LOADED && !gEnv->network)
-	{
-		gEnv->player->update(dt);
-	}
+        String fn_prefix = std::string(App::sys_screenshot_dir.GetActive()) + RoR::PATH_SLASH + String("screenshot_");
+        String fn_name = date.str() + String("_");
+        String fn_suffix = String(".") + App::app_screenshot_format.GetActive();
 
-	if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_SCREENSHOT, 0.5f))
-	{
-		int mNumScreenShots=0;
-		String tmpfn = SSETTING("User Path", "") + String("screenshot_") + TOSTRING(++mNumScreenShots) + String(".") + String(screenshotformat);
-		while(RoR::PlatformUtils::FileExists(tmpfn.c_str()))
-		{
-			tmpfn = SSETTING("User Path", "") + String("screenshot_") + TOSTRING(++mNumScreenShots) + String(".") + String(screenshotformat);
-		}
+        if (m_last_screenshot_date == date.str())
+        {
+            m_last_screenshot_id++;
+        }
+        else
+        {
+            m_last_screenshot_id = 1;
+        }
+        m_last_screenshot_date = date.str();
 
-#ifdef USE_MYGUI
-		MyGUI::PointerManager::getInstance().setVisible(false);
-#endif // USE_MYGUI
-		if (String(screenshotformat) == "png")
-		{
+        fn_name = fn_name + TOSTRING(m_last_screenshot_id);
 
+        String tmpfn = fn_prefix + fn_name + fn_suffix;
 
-			// add some more data into the image
-			AdvancedScreen *as = new AdvancedScreen(RoR::Application::GetOgreSubsystem()->GetRenderWindow(), tmpfn);
-			//as->addData("terrain_Name", loadedTerrain);
-			//as->addData("terrain_ModHash", terrainModHash);
-			//as->addData("terrain_FileHash", terrainFileHash);
-			as->addData("Truck_Num", TOSTRING(BeamFactory::getSingleton().getCurrentTruckNumber()));
-			if (curr_truck)
-			{
-				as->addData("Truck_fname", curr_truck->realtruckfilename);
-				as->addData("Truck_name", curr_truck->getTruckName());
-				as->addData("Truck_beams", TOSTRING(curr_truck->getBeamCount()));
-				as->addData("Truck_nodes", TOSTRING(curr_truck->getNodeCount()));
-			}
-			as->addData("User_NickName", SSETTING("Nickname", "Anonymous"));
-			as->addData("User_Language", SSETTING("Language", "English"));
-			as->addData("RoR_VersionString", String(ROR_VERSION_STRING));
-			as->addData("RoR_ProtocolVersion", String(RORNET_VERSION));
-			as->addData("RoR_BinaryHash", SSETTING("BinaryHash", ""));
-			as->addData("MP_ServerName", SSETTING("Server name", ""));
-			as->addData("MP_ServerPort", SSETTING("Server port", ""));
-			as->addData("MP_NetworkEnabled", SSETTING("Network enable", "No"));
-			as->addData("Camera_Mode", gEnv->cameraManager ? TOSTRING(gEnv->cameraManager->getCurrentBehavior()) : "None");
-			as->addData("Camera_Position", TOSTRING(gEnv->mainCamera->getPosition()));
+        RoR::App::GetGuiManager()->HideNotification();
+        RoR::App::GetGuiManager()->SetMouseCursorVisibility(RoR::GUIManager::MouseCursorVisibility::HIDDEN);
 
-			const RenderTarget::FrameStats& stats = RoR::Application::GetOgreSubsystem()->GetRenderWindow()->getStatistics();
-			as->addData("AVGFPS", TOSTRING(stats.avgFPS));
+        m_actor_manager.UpdateFlexbodiesFinal(); // Waits until all flexbody tasks are finished
 
-			as->write();
-			delete(as);
-		} else
-		{
-			RoR::Application::GetOgreSubsystem()->GetRenderWindow()->update();
-			RoR::Application::GetOgreSubsystem()->GetRenderWindow()->writeContentsToFile(tmpfn);
-		}
+        if (App::app_screenshot_format.GetActive() == "png")
+        {
+            // add some more data into the image
+            AdvancedScreen* as = new AdvancedScreen(RoR::App::GetOgreSubsystem()->GetRenderWindow(), tmpfn);
+            //as->addData("terrain_Name", loadedTerrain);
+            //as->addData("terrain_ModHash", terrainModHash);
+            //as->addData("terrain_FileHash", terrainFileHash);
+            as->addData("Truck_Num", TOSTRING(m_player_actor->ar_instance_id));
+            if (m_player_actor)
+            {
+                as->addData("Truck_fname", m_player_actor->ar_filename);
+                as->addData("Truck_name", m_player_actor->GetActorDesignName());
+                as->addData("Truck_beams", TOSTRING(m_player_actor->ar_num_beams));
+                as->addData("Truck_nodes", TOSTRING(m_player_actor->ar_num_nodes));
+            }
+            as->addData("User_NickName", App::mp_player_name.GetActive());
+            as->addData("User_Language", App::app_language.GetActive());
+            as->addData("RoR_VersionString", String(ROR_VERSION_STRING));
+            as->addData("RoR_ProtocolVersion", String(RORNET_VERSION));
+            as->addData("RoR_BinaryHash", "");
+            as->addData("MP_ServerName", App::mp_server_host.GetActive());
+            as->addData("MP_ServerPort", TOSTRING(App::mp_server_port.GetActive()));
+            as->addData("MP_NetworkEnabled", (App::mp_state.GetActive() == MpState::CONNECTED) ? "Yes" : "No");
+            as->addData("Camera_Mode", gEnv->cameraManager ? TOSTRING(gEnv->cameraManager->getCurrentBehavior()) : "None");
+            as->addData("Camera_Position", TOSTRING(gEnv->mainCamera->getPosition()));
 
-#ifdef USE_MYGUI
-		MyGUI::PointerManager::getInstance().setVisible(true);
-#endif // USE_MYGUI
+            const RenderTarget::FrameStats& stats = RoR::App::GetOgreSubsystem()->GetRenderWindow()->getStatistics();
+            as->addData("AVGFPS", TOSTRING(stats.avgFPS));
 
-		// show new flash message
-		String ssmsg = _L("Screenshot:") + TOSTRING(mNumScreenShots);
-		LOG(ssmsg);
-#ifdef USE_MYGUI
-		RoR::Application::GetConsole()->putMessage(Console::CONSOLE_MSGTYPE_INFO, Console::CONSOLE_SYSTEM_NOTICE, ssmsg, "camera.png", 10000, false);
-		RoR::Application::GetGuiManager()->PushNotification("Notice:", ssmsg);
-#endif //USE_MYGUI
-	}
+            as->write();
+            delete(as);
+        }
+        else
+        {
+            RoR::App::GetOgreSubsystem()->GetRenderWindow()->update();
+            RoR::App::GetOgreSubsystem()->GetRenderWindow()->writeContentsToFile(tmpfn);
+        }
 
-	if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_TRUCKEDIT_RELOAD, 0.5f) && curr_truck)
-	{
-		reloadCurrentTruck();
-		return true;
-	}
+        App::GetGuiManager()->SetMouseCursorVisibility(GUIManager::MouseCursorVisibility::VISIBLE);
 
-	if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_GETNEWVEHICLE, 0.5f) && loading_state != NONE_LOADED)
-	{
-		// get out first
-		if (curr_truck) BeamFactory::getSingleton().setCurrentTruck(-1);
-		reload_pos = gEnv->player->getPosition() + Vector3(0.0f, 1.0f, 0.0f); // 1 meter above the character
-		freeTruckPosition = true;
-		loading_state = RELOADING;
-		Application::GetGuiManager()->getMainSelector()->Show(LT_AllBeam);
-		return true;
-	}
+        // show new flash message
+        String ssmsg = _L("Screenshot:") + String(" ") + fn_name + fn_suffix;
+        LOG(ssmsg);
+        RoR::App::GetConsole()->putMessage(Console::CONSOLE_MSGTYPE_INFO, Console::CONSOLE_SYSTEM_NOTICE, ssmsg, "camera.png", 10000, false);
+        RoR::App::GetGuiManager()->PushNotification("Notice:", ssmsg);
+    }
 
-	// position storage
-	if (enablePosStor && curr_truck)
-	{
-		int res = -10, slot=-1;
-		if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_SAVE_POS01, 0.5f)) { slot=0; res = curr_truck->savePosition(slot); };
-		if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_SAVE_POS02, 0.5f)) { slot=1; res = curr_truck->savePosition(slot); };
-		if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_SAVE_POS03, 0.5f)) { slot=2; res = curr_truck->savePosition(slot); };
-		if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_SAVE_POS04, 0.5f)) { slot=3; res = curr_truck->savePosition(slot); };
-		if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_SAVE_POS05, 0.5f)) { slot=4; res = curr_truck->savePosition(slot); };
-		if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_SAVE_POS06, 0.5f)) { slot=5; res = curr_truck->savePosition(slot); };
-		if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_SAVE_POS07, 0.5f)) { slot=6; res = curr_truck->savePosition(slot); };
-		if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_SAVE_POS08, 0.5f)) { slot=7; res = curr_truck->savePosition(slot); };
-		if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_SAVE_POS09, 0.5f)) { slot=8; res = curr_truck->savePosition(slot); };
-		if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_SAVE_POS10, 0.5f)) { slot=9; res = curr_truck->savePosition(slot); };
-#ifdef USE_MYGUI
-		if (slot != -1 && !res)
-		{
-			RoR::Application::GetConsole()->putMessage(Console::CONSOLE_MSGTYPE_INFO, Console::CONSOLE_SYSTEM_NOTICE, _L("Position saved under slot ") + TOSTRING(slot + 1), "infromation.png");
-			RoR::Application::GetGuiManager()->PushNotification("Notice:", _L("Position saved under slot ") + TOSTRING(slot + 1));
-		}
-		else if (slot != -1 && res)
-		{
-			RoR::Application::GetConsole()->putMessage(Console::CONSOLE_MSGTYPE_INFO, Console::CONSOLE_SYSTEM_NOTICE, _L("Error while saving position saved under slot ") + TOSTRING(slot + 1), "error.png");
-			RoR::Application::GetGuiManager()->PushNotification("Notice:", _L("Error while saving position saved under slot ") + TOSTRING(slot + 1));
-		}
-#endif //USE_MYGUI
+    if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_TRUCKEDIT_RELOAD, 0.5f) && m_player_actor)
+    {
+        this->ReloadPlayerActor();
+        return true;
+    }
 
-		if (res == -10)
-		{
-			if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_LOAD_POS01, 0.5f)) { slot=0; res = curr_truck->loadPosition(slot); };
-			if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_LOAD_POS02, 0.5f)) { slot=1; res = curr_truck->loadPosition(slot); };
-			if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_LOAD_POS03, 0.5f)) { slot=2; res = curr_truck->loadPosition(slot); };
-			if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_LOAD_POS04, 0.5f)) { slot=3; res = curr_truck->loadPosition(slot); };
-			if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_LOAD_POS05, 0.5f)) { slot=4; res = curr_truck->loadPosition(slot); };
-			if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_LOAD_POS06, 0.5f)) { slot=5; res = curr_truck->loadPosition(slot); };
-			if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_LOAD_POS07, 0.5f)) { slot=6; res = curr_truck->loadPosition(slot); };
-			if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_LOAD_POS08, 0.5f)) { slot=7; res = curr_truck->loadPosition(slot); };
-			if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_LOAD_POS09, 0.5f)) { slot=8; res = curr_truck->loadPosition(slot); };
-			if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_LOAD_POS10, 0.5f)) { slot=9; res = curr_truck->loadPosition(slot); };
-#ifdef USE_MYGUI
-			if (slot != -1 && res==0)
-			{
-				RoR::Application::GetGuiManager()->PushNotification("Notice:", _L("Loaded position from slot ") + TOSTRING(slot + 1));
-				RoR::Application::GetConsole()->putMessage(Console::CONSOLE_MSGTYPE_INFO, Console::CONSOLE_SYSTEM_NOTICE, _L("Loaded position from slot ") + TOSTRING(slot + 1), "infromation.png");
-			}
-			else if (slot != -1 && res != 0)
-			{
-				RoR::Application::GetGuiManager()->PushNotification("Notice:", _L("Could not load position from slot ") + TOSTRING(slot + 1));
-				RoR::Application::GetConsole()->putMessage(Console::CONSOLE_MSGTYPE_INFO, Console::CONSOLE_SYSTEM_NOTICE, _L("Could not load position from slot ") + TOSTRING(slot + 1), "error.png");
-			}
-#endif // USE_MYGUI
-		}
-	}
+    // position storage
+    if (m_player_actor && App::sim_position_storage.GetActive())
+    {
+        int res = -10, slot = -1;
+        if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_SAVE_POS01, 0.5f))
+        {
+            slot = 0;
+            res = m_player_actor->savePosition(slot);
+        };
+        if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_SAVE_POS02, 0.5f))
+        {
+            slot = 1;
+            res = m_player_actor->savePosition(slot);
+        };
+        if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_SAVE_POS03, 0.5f))
+        {
+            slot = 2;
+            res = m_player_actor->savePosition(slot);
+        };
+        if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_SAVE_POS04, 0.5f))
+        {
+            slot = 3;
+            res = m_player_actor->savePosition(slot);
+        };
+        if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_SAVE_POS05, 0.5f))
+        {
+            slot = 4;
+            res = m_player_actor->savePosition(slot);
+        };
+        if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_SAVE_POS06, 0.5f))
+        {
+            slot = 5;
+            res = m_player_actor->savePosition(slot);
+        };
+        if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_SAVE_POS07, 0.5f))
+        {
+            slot = 6;
+            res = m_player_actor->savePosition(slot);
+        };
+        if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_SAVE_POS08, 0.5f))
+        {
+            slot = 7;
+            res = m_player_actor->savePosition(slot);
+        };
+        if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_SAVE_POS09, 0.5f))
+        {
+            slot = 8;
+            res = m_player_actor->savePosition(slot);
+        };
+        if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_SAVE_POS10, 0.5f))
+        {
+            slot = 9;
+            res = m_player_actor->savePosition(slot);
+        };
+        if (slot != -1 && !res)
+        {
+            RoR::App::GetConsole()->putMessage(Console::CONSOLE_MSGTYPE_INFO, Console::CONSOLE_SYSTEM_NOTICE, _L("Position saved under slot ") + TOSTRING(slot + 1), "infromation.png");
+            RoR::App::GetGuiManager()->PushNotification("Notice:", _L("Position saved under slot ") + TOSTRING(slot + 1));
+        }
+        else if (slot != -1 && res)
+        {
+            RoR::App::GetConsole()->putMessage(Console::CONSOLE_MSGTYPE_INFO, Console::CONSOLE_SYSTEM_NOTICE, _L("Error while saving position saved under slot ") + TOSTRING(slot + 1), "error.png");
+            RoR::App::GetGuiManager()->PushNotification("Notice:", _L("Error while saving position saved under slot ") + TOSTRING(slot + 1));
+        }
 
-	// camera FOV settings
-	if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_FOV_LESS, 0.1f) || RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_FOV_MORE, 0.1f))
-	{
-		int fov = gEnv->mainCamera->getFOVy().valueDegrees();
+        if (res == -10)
+        {
+            if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_LOAD_POS01, 0.5f))
+            {
+                slot = 0;
+                res = m_player_actor->loadPosition(slot);
+            };
+            if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_LOAD_POS02, 0.5f))
+            {
+                slot = 1;
+                res = m_player_actor->loadPosition(slot);
+            };
+            if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_LOAD_POS03, 0.5f))
+            {
+                slot = 2;
+                res = m_player_actor->loadPosition(slot);
+            };
+            if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_LOAD_POS04, 0.5f))
+            {
+                slot = 3;
+                res = m_player_actor->loadPosition(slot);
+            };
+            if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_LOAD_POS05, 0.5f))
+            {
+                slot = 4;
+                res = m_player_actor->loadPosition(slot);
+            };
+            if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_LOAD_POS06, 0.5f))
+            {
+                slot = 5;
+                res = m_player_actor->loadPosition(slot);
+            };
+            if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_LOAD_POS07, 0.5f))
+            {
+                slot = 6;
+                res = m_player_actor->loadPosition(slot);
+            };
+            if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_LOAD_POS08, 0.5f))
+            {
+                slot = 7;
+                res = m_player_actor->loadPosition(slot);
+            };
+            if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_LOAD_POS09, 0.5f))
+            {
+                slot = 8;
+                res = m_player_actor->loadPosition(slot);
+            };
+            if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_LOAD_POS10, 0.5f))
+            {
+                slot = 9;
+                res = m_player_actor->loadPosition(slot);
+            };
+            if (slot != -1 && res == 0)
+            {
+                RoR::App::GetGuiManager()->PushNotification("Notice:", _L("Loaded position from slot ") + TOSTRING(slot + 1));
+                RoR::App::GetConsole()->putMessage(Console::CONSOLE_MSGTYPE_INFO, Console::CONSOLE_SYSTEM_NOTICE, _L("Loaded position from slot ") + TOSTRING(slot + 1), "infromation.png");
+            }
+            else if (slot != -1 && res != 0)
+            {
+                RoR::App::GetGuiManager()->PushNotification("Notice:", _L("Could not load position from slot ") + TOSTRING(slot + 1));
+                RoR::App::GetConsole()->putMessage(Console::CONSOLE_MSGTYPE_INFO, Console::CONSOLE_SYSTEM_NOTICE, _L("Could not load position from slot ") + TOSTRING(slot + 1), "error.png");
+            }
+        }
+    }
 
-		if (RoR::Application::GetInputEngine()->getEventBoolValue(EV_COMMON_FOV_LESS))
-			fov--;
-		else
-			fov++;
+    // camera FOV settings
+    const bool fov_less = RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_FOV_LESS, 0.1f);
+    const bool fov_more = RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_FOV_MORE, 0.1f);
+    if (fov_less || fov_more)
+    {
+        float fov = gEnv->mainCamera->getFOVy().valueDegrees();
+        fov = (fov_less) ? (fov - 1.f) : (fov + 1.f);
+        fov = Round(fov);
 
-		if (fov >= 10 && fov <= 160)
-		{
-			gEnv->mainCamera->setFOVy(Degree(fov));
+        if (fov >= 10 && fov <= 160)
+        {
+            gEnv->mainCamera->setFOVy(Degree(fov));
 
-	#ifdef USE_MYGUI
-			RoR::Application::GetConsole()->putMessage(Console::CONSOLE_MSGTYPE_INFO, Console::CONSOLE_SYSTEM_NOTICE, _L("FOV: ") + TOSTRING(fov), "camera_edit.png", 2000);
-			RoR::Application::GetGuiManager()->PushNotification("Notice:", _L("FOV: ") + TOSTRING(fov));
-	#endif // USE_MYGUI
+            RoR::App::GetConsole()->putMessage(Console::CONSOLE_MSGTYPE_INFO, Console::CONSOLE_SYSTEM_NOTICE, _L("FOV: ") + TOSTRING(fov), "camera_edit.png", 2000);
+            RoR::App::GetGuiManager()->PushNotification("Notice:", _L("FOV: ") + TOSTRING(fov));
 
-			// save the settings
-			if (gEnv->cameraManager &&
-				gEnv->cameraManager->hasActiveBehavior() &&
-				gEnv->cameraManager->getCurrentBehavior() == CameraManager::CAMERA_BEHAVIOR_VEHICLE_CINECAM)
-			{
-				SETTINGS.setSetting("FOV Internal", TOSTRING(fov));
-			} else
-			{
-				SETTINGS.setSetting("FOV External", TOSTRING(fov));
-			}
-		} else
-		{
-#ifdef USE_MYGUI
-			RoR::Application::GetConsole()->putMessage(Console::CONSOLE_MSGTYPE_INFO, Console::CONSOLE_SYSTEM_NOTICE, _L("FOV: Limit reached"), "camera_edit.png", 2000);
-			RoR::Application::GetGuiManager()->PushNotification("Notice:", _L("FOV: Limit reached") + TOSTRING(""));
-#endif // USE_MYGUI
-		}
-	}
+            // save the settings
+            if (gEnv->cameraManager &&
+                gEnv->cameraManager->hasActiveBehavior() &&
+                gEnv->cameraManager->getCurrentBehavior() == RoR::PerVehicleCameraContext::CAMCTX_BEHAVIOR_VEHICLE_CINECAM)
+            {
+                App::gfx_fov_internal.SetActive(fov);
+            }
+            else
+            {
+                App::gfx_fov_external.SetActive(fov);
+            }
+        }
+        else
+        {
+            RoR::App::GetConsole()->putMessage(Console::CONSOLE_MSGTYPE_INFO, Console::CONSOLE_SYSTEM_NOTICE, _L("FOV: Limit reached"), "camera_edit.png", 2000);
+            RoR::App::GetGuiManager()->PushNotification("Notice:", _L("FOV: Limit reached") + TOSTRING(""));
+        }
+    }
 
-	// full screen/windowed screen switching
-	if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_FULLSCREEN_TOGGLE, 2.0f))
-	{
-		static int org_width = -1, org_height = -1;
-		int width = RoR::Application::GetOgreSubsystem()->GetRenderWindow()->getWidth();
-		int height = RoR::Application::GetOgreSubsystem()->GetRenderWindow()->getHeight();
-		if (org_width == -1)
-			org_width = width;
-		if (org_height == -1)
-			org_height = height;
-		bool mode = RoR::Application::GetOgreSubsystem()->GetRenderWindow()->isFullScreen();
-		if (!mode)
-		{
-			RoR::Application::GetOgreSubsystem()->GetRenderWindow()->setFullscreen(true, org_width, org_height);
-			LOG(" ** switched to fullscreen: "+TOSTRING(width)+"x"+TOSTRING(height));
-		} else
-		{
-			RoR::Application::GetOgreSubsystem()->GetRenderWindow()->setFullscreen(false, 640, 480);
-			RoR::Application::GetOgreSubsystem()->GetRenderWindow()->setFullscreen(false, org_width, org_height);
-			LOG(" ** switched to windowed mode: ");
-		}
-	}
+    // full screen/windowed screen switching
+    if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_FULLSCREEN_TOGGLE, 2.0f))
+    {
+        static int org_width = -1, org_height = -1;
+        int width = RoR::App::GetOgreSubsystem()->GetRenderWindow()->getWidth();
+        int height = RoR::App::GetOgreSubsystem()->GetRenderWindow()->getHeight();
+        if (org_width == -1)
+            org_width = width;
+        if (org_height == -1)
+            org_height = height;
+        bool mode = RoR::App::GetOgreSubsystem()->GetRenderWindow()->isFullScreen();
+        if (!mode)
+        {
+            RoR::App::GetOgreSubsystem()->GetRenderWindow()->setFullscreen(true, org_width, org_height);
+            LOG(" ** switched to fullscreen: "+TOSTRING(width)+"x"+TOSTRING(height));
+        }
+        else
+        {
+            RoR::App::GetOgreSubsystem()->GetRenderWindow()->setFullscreen(false, 640, 480);
+            RoR::App::GetOgreSubsystem()->GetRenderWindow()->setFullscreen(false, org_width, org_height);
+            LOG(" ** switched to windowed mode: ");
+        }
+    }
 
+    static std::vector<TerrainObjectManager::EditorObject> object_list;
+    static bool terrain_editing_track_object = true;
+    static bool terrain_editing_mode = false;
+    static int terrain_editing_rotation_axis = 1;
+    static int object_index = -1;
 
-	if (loading_state==ALL_LOADED)
-	{
-		if (gEnv->cameraManager && !gEnv->cameraManager->gameControlsLocked())
-		{
-			if (!curr_truck)
-			{
-				if (gEnv->player)
-				{
-					if (!Application::GetGuiManager()->GetPauseMenuVisible())
-						gEnv->player->setPhysicsEnabled(true);
-				}
-			} else // we are in a vehicle
-			{
-				// get commands
-				// -- here we should define a maximum numbers per trucks. Some trucks does not have that much commands
-				// -- available, so why should we iterate till MAX_COMMANDS?
-				for (int i=1; i<=MAX_COMMANDS+1; i++)
-				{
-					int eventID = EV_COMMANDS_01 + (i - 1);
+    if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_TOGGLE_TERRAIN_EDITOR))
+    {
+        terrain_editing_mode = !terrain_editing_mode;
+        App::sim_state.SetActive(terrain_editing_mode ? SimState::EDITOR_MODE : SimState::RUNNING);
+        UTFString ssmsg = terrain_editing_mode ? _L("Entered terrain editing mode") : _L("Left terrain editing mode");
+        RoR::App::GetConsole()->putMessage(Console::CONSOLE_MSGTYPE_INFO, Console::CONSOLE_SYSTEM_NOTICE, ssmsg, "infromation.png", 2000, false);
+        RoR::App::GetGuiManager()->PushNotification("Notice:", ssmsg);
 
-					curr_truck->commandkey[i].playerInputValue = RoR::Application::GetInputEngine()->getEventValue(eventID);
-				}
+        if (terrain_editing_mode)
+        {
+            object_list = App::GetSimTerrain()->getObjectManager()->GetEditorObjects();
+            object_index = -1;
+        }
+        else
+        {
+            std::string path = std::string(RoR::App::sys_config_dir.GetActive()) + RoR::PATH_SLASH + "editor_out.cfg";
+            std::ofstream file(path);
+            if (file.is_open())
+            {
+                for (auto object : object_list)
+                {
+                    SceneNode* sn = object.node;
+                    if (sn != nullptr)
+                    {
+                        String pos = TOSTRING(object.position.x) + ", " + TOSTRING(object.position.y) + ", " + TOSTRING(object.position.z);
+                        String rot = TOSTRING(object.rotation.x) + ", " + TOSTRING(object.rotation.y) + ", " + TOSTRING(object.rotation.z);
 
-				if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_TOGGLE_FORWARDCOMMANDS))
-				{
-					curr_truck->forwardcommands = !curr_truck->forwardcommands;
-#ifdef USE_MYGUI
-					if ( curr_truck->forwardcommands )
-					{
-						RoR::Application::GetConsole()->putMessage(Console::CONSOLE_MSGTYPE_INFO, Console::CONSOLE_SYSTEM_NOTICE, _L("forwardcommands enabled"), "information.png", 3000);
-					} else
-					{
-						RoR::Application::GetConsole()->putMessage(Console::CONSOLE_MSGTYPE_INFO, Console::CONSOLE_SYSTEM_NOTICE, _L("forwardcommands disabled"), "information.png", 3000);
-					}
-#endif // USE_MYGUI
-				}
-				if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_TOGGLE_IMPORTCOMMANDS))
-				{
-					curr_truck->importcommands = !curr_truck->importcommands;
-#ifdef USE_MYGUI
-					if ( curr_truck->importcommands )
-					{
-						RoR::Application::GetConsole()->putMessage(Console::CONSOLE_MSGTYPE_INFO, Console::CONSOLE_SYSTEM_NOTICE, _L("importcommands enabled"), "information.png", 3000);
-					} else
-					{
-						RoR::Application::GetConsole()->putMessage(Console::CONSOLE_MSGTYPE_INFO, Console::CONSOLE_SYSTEM_NOTICE, _L("importcommands disabled"), "information.png", 3000);
-					}
-#endif // USE_MYGUI
-				}
+                        file << pos + ", " + rot + ", " + object.name + "\n";
+                    }
+                }
+                file.close();
+            }
+            else
+            {
+                LOG("Cannot write '" + path + "'");
+            }
+        }
+    }
 
-				// replay mode
-				if (curr_truck->replaymode)
-				{
-					if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_REPLAY_FORWARD, 0.1f) && curr_truck->replaypos <= 0)
-					{
-						curr_truck->replaypos++;
-					}
-					if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_REPLAY_BACKWARD, 0.1f) && curr_truck->replaypos > -curr_truck->replaylen)
-					{
-						curr_truck->replaypos--;
-					}
-					if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_REPLAY_FAST_FORWARD, 0.1f) && curr_truck->replaypos+10 <= 0)
-					{
-						curr_truck->replaypos+=10;
-					}
-					if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_REPLAY_FAST_BACKWARD, 0.1f) && curr_truck->replaypos-10 > -curr_truck->replaylen)
-					{
-						curr_truck->replaypos-=10;
-					}
-					if (RoR::Application::GetInputEngine()->isKeyDown(OIS::KC_LMENU) && RoR::Application::GetInputEngine()->isKeyDown(OIS::KC_V))
-					{
-						
-					}
+    //OLD m_loading_state == ALL_LOADED
+    if (simEDITOR(s) && object_list.size() > 0)
+    {
+        bool update = false;
+        if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_ENTER_OR_EXIT_TRUCK))
+        {
+            if (object_index == -1)
+            {
+                // Select nearest object
+                Vector3 ref_pos = gEnv->cameraManager->gameControlsLocked() ? gEnv->mainCamera->getPosition() : gEnv->player->getPosition();
+                float min_dist = std::numeric_limits<float>::max();
+                for (int i = 0; i < (int)object_list.size(); i++)
+                {
+                    float dist = ref_pos.squaredDistance(object_list[i].node->getPosition());
+                    if (dist < min_dist)
+                    {
+                        object_index = i;
+                        min_dist = dist;
+                        update = true;
+                    }
+                }
+            }
+            else
+            {
+                object_index = -1;
+            }
+        }
+        else if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_ENTER_NEXT_TRUCK, 0.25f))
+        {
+            object_index = (object_index + 1 + (int)object_list.size()) % object_list.size();
+            update = true;
+        }
+        else if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_ENTER_PREVIOUS_TRUCK, 0.25f))
+        {
+            object_index = (object_index - 1 + (int)object_list.size()) % object_list.size();
+            update = true;
+        }
+        if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_RESCUE_TRUCK))
+        {
+            UTFString axis = _L("ry");
+            if (terrain_editing_rotation_axis == 0)
+            {
+                axis = _L("ry");
+                terrain_editing_rotation_axis = 1;
+            }
+            else if (terrain_editing_rotation_axis == 1)
+            {
+                axis = _L("rz");
+                terrain_editing_rotation_axis = 2;
+            }
+            else if (terrain_editing_rotation_axis == 2)
+            {
+                axis = _L("rx");
+                terrain_editing_rotation_axis = 0;
+            }
+            UTFString ssmsg = _L("Rotating: ") + axis;
+            RoR::App::GetConsole()->putMessage(Console::CONSOLE_MSGTYPE_INFO, Console::CONSOLE_SYSTEM_NOTICE, ssmsg, "infromation.png", 2000, false);
+            RoR::App::GetGuiManager()->PushNotification("Notice:", ssmsg);
+        }
+        if (RoR::App::GetInputEngine()->isKeyDownValueBounce(OIS::KC_SPACE))
+        {
+            terrain_editing_track_object = !terrain_editing_track_object;
+            UTFString ssmsg = terrain_editing_track_object ? _L("Enabled object tracking") : _L("Disabled object tracking");
+            RoR::App::GetConsole()->putMessage(Console::CONSOLE_MSGTYPE_INFO, Console::CONSOLE_SYSTEM_NOTICE, ssmsg, "infromation.png", 2000, false);
+            RoR::App::GetGuiManager()->PushNotification("Notice:", ssmsg);
+        }
+        if (object_index != -1 && update)
+        {
+            String ssmsg = _L("Selected object: [") + TOSTRING(object_index) + "/" + TOSTRING(object_list.size()) + "] (" + object_list[object_index].name + ")";
+            RoR::App::GetConsole()->putMessage(Console::CONSOLE_MSGTYPE_INFO, Console::CONSOLE_SYSTEM_NOTICE, ssmsg, "infromation.png", 2000, false);
+            RoR::App::GetGuiManager()->PushNotification("Notice:", ssmsg);
+            if (terrain_editing_track_object)
+            {
+                gEnv->player->setPosition(object_list[object_index].node->getPosition());
+                //gEnv->cameraManager->NotifyContextChange();
+            }
+        }
+        if (object_index != -1 && RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_RESET_TRUCK))
+        {
+            SceneNode* sn = object_list[object_index].node;
 
-					if (RoR::Application::GetInputEngine()->isKeyDown(OIS::KC_LMENU))
-					{
-						if (curr_truck->replaypos <= 0 && curr_truck->replaypos >= -curr_truck->replaylen)
-						{
-							if (RoR::Application::GetInputEngine()->isKeyDown(OIS::KC_LSHIFT) || RoR::Application::GetInputEngine()->isKeyDown(OIS::KC_RSHIFT))
-							{
-								curr_truck->replaypos += RoR::Application::GetInputEngine()->getMouseState().X.rel * 1.5f;
-							} else
-							{
-								curr_truck->replaypos += RoR::Application::GetInputEngine()->getMouseState().X.rel * 0.05f;
-							}
-							if (curr_truck->replaypos > 0)
-							{
-								curr_truck->replaypos = 0;
-							}
-							if (curr_truck->replaypos < -curr_truck->replaylen)
-							{
-								curr_truck->replaypos = -curr_truck->replaylen;
-							}
-						}
-					}
-				}
+            object_list[object_index].position = object_list[object_index].initial_position;
+            sn->setPosition(object_list[object_index].position);
 
-				if (curr_truck->driveable==TRUCK)
-				{
-					LandVehicleSimulation::UpdateVehicle(curr_truck, dt);
-				}
-				if (curr_truck->driveable==AIRPLANE)
-				{
-					AircraftSimulation::UpdateVehicle(curr_truck, dt);
-				}
-				if (curr_truck->driveable==BOAT)
-				{
-					//BOAT SPECIFICS
+            object_list[object_index].rotation = object_list[object_index].initial_rotation;
+            Vector3 rot = object_list[object_index].rotation;
+            sn->setOrientation(Quaternion(Degree(rot.x), Vector3::UNIT_X) * Quaternion(Degree(rot.y), Vector3::UNIT_Y) * Quaternion(Degree(rot.z), Vector3::UNIT_Z));
+            sn->pitch(Degree(-90));
+        }
+        if (object_index != -1 && gEnv->cameraManager && !gEnv->cameraManager->gameControlsLocked())
+        {
+            SceneNode* sn = object_list[object_index].node;
 
-					//throttle
-					if (RoR::Application::GetInputEngine()->isEventDefined(EV_BOAT_THROTTLE_AXIS))
-					{
-						float f = RoR::Application::GetInputEngine()->getEventValue(EV_BOAT_THROTTLE_AXIS);
-						// use negative values also!
-						f = f * 2 - 1;
-						for (int i=0; i<curr_truck->free_screwprop; i++)
-							curr_truck->screwprops[i]->setThrottle(-f);
-					}
-					if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_BOAT_THROTTLE_DOWN, 0.1f))
-					{
-						//throttle down
-						for (int i=0; i<curr_truck->free_screwprop; i++)
-							curr_truck->screwprops[i]->setThrottle(curr_truck->screwprops[i]->getThrottle()-0.05);
-					}
-					if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_BOAT_THROTTLE_UP, 0.1f))
-					{
-						//throttle up
-						for (int i=0; i<curr_truck->free_screwprop; i++)
-							curr_truck->screwprops[i]->setThrottle(curr_truck->screwprops[i]->getThrottle()+0.05);
-					}
+            Vector3 translation = Vector3::ZERO;
+            float rotation = 0.0f;
 
+            if (RoR::App::GetInputEngine()->getEventBoolValue(EV_TRUCK_STEER_LEFT))
+            {
+                rotation += 2.0f;
+            }
+            else if (RoR::App::GetInputEngine()->getEventBoolValue(EV_TRUCK_STEER_RIGHT))
+            {
+                rotation -= 2.0f;
+            }
+            if (RoR::App::GetInputEngine()->getEventBoolValue(EV_TRUCK_ACCELERATE))
+            {
+                translation.y += 0.5f;
+            }
+            else if (RoR::App::GetInputEngine()->getEventBoolValue(EV_TRUCK_BRAKE))
+            {
+                translation.y -= 0.5f;
+            }
+            if (RoR::App::GetInputEngine()->getEventBoolValue(EV_CHARACTER_FORWARD))
+            {
+                translation.x += 0.5f;
+            }
+            else if (RoR::App::GetInputEngine()->getEventBoolValue(EV_CHARACTER_BACKWARDS))
+            {
+                translation.x -= 0.5f;
+            }
+            if (RoR::App::GetInputEngine()->getEventBoolValue(EV_CHARACTER_SIDESTEP_RIGHT))
+            {
+                translation.z += 0.5f;
+            }
+            else if (RoR::App::GetInputEngine()->getEventBoolValue(EV_CHARACTER_SIDESTEP_LEFT))
+            {
+                translation.z -= 0.5f;
+            }
 
-					// steer
-					float tmp_steer_left = RoR::Application::GetInputEngine()->getEventValue(EV_BOAT_STEER_LEFT);
-					float tmp_steer_right = RoR::Application::GetInputEngine()->getEventValue(EV_BOAT_STEER_RIGHT);
-					float stime = RoR::Application::GetInputEngine()->getEventBounceTime(EV_BOAT_STEER_LEFT) + RoR::Application::GetInputEngine()->getEventBounceTime(EV_BOAT_STEER_RIGHT);
-					float sum_steer = (tmp_steer_left - tmp_steer_right) * dt;
-					// do not center the rudder!
-					if (fabs(sum_steer)>0 && stime <= 0)
-					{
-						for (int i=0; i<curr_truck->free_screwprop; i++)
-							curr_truck->screwprops[i]->setRudder(curr_truck->screwprops[i]->getRudder() + sum_steer);
-					}
-					if (RoR::Application::GetInputEngine()->isEventDefined(EV_BOAT_STEER_LEFT_AXIS) && RoR::Application::GetInputEngine()->isEventDefined(EV_BOAT_STEER_RIGHT_AXIS))
-					{
-						tmp_steer_left = RoR::Application::GetInputEngine()->getEventValue(EV_BOAT_STEER_LEFT_AXIS);
-						tmp_steer_right = RoR::Application::GetInputEngine()->getEventValue(EV_BOAT_STEER_RIGHT_AXIS);
-						sum_steer = (tmp_steer_left - tmp_steer_right);
-						for (int i=0; i<curr_truck->free_screwprop; i++)
-							curr_truck->screwprops[i]->setRudder(sum_steer);
-					}
-					if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_BOAT_CENTER_RUDDER, 0.1f))
-					{
-						for (int i=0; i<curr_truck->free_screwprop; i++)
-							curr_truck->screwprops[i]->setRudder(0);
-					}
+            if (translation != Vector3::ZERO || rotation != 0.0f)
+            {
+                float scale = RoR::App::GetInputEngine()->isKeyDown(OIS::KC_LMENU) ? 0.1f : 1.0f;
+                scale *= RoR::App::GetInputEngine()->isKeyDown(OIS::KC_LSHIFT) ? 3.0f : 1.0f;
+                scale *= RoR::App::GetInputEngine()->isKeyDown(OIS::KC_LCONTROL) ? 10.0f : 1.0f;
 
-					if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_BOAT_REVERSE))
-					{
-						for (int i=0; i<curr_truck->free_screwprop; i++)
-							curr_truck->screwprops[i]->toggleReverse();
-					}
-				}
-				//COMMON KEYS
+                object_list[object_index].position += translation * scale * dt;
+                sn->setPosition(object_list[object_index].position);
 
-				if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_TRUCK_REMOVE))
-				{
-					BeamFactory::getSingleton().removeCurrentTruck();
-				}
-				if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_ROPELOCK))
-				{
-					curr_truck->ropeToggle(-1);
-				}
-				if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_LOCK))
-				{
-					curr_truck->hookToggle(-1, HOOK_TOGGLE, -1);
-					//SlideNodeLock
-					curr_truck->toggleSlideNodeLock();
-				}
-				if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_AUTOLOCK))
-				{
-					//unlock all autolocks
-					curr_truck->hookToggle(-2, HOOK_UNLOCK, -1);
-				}
-				//strap
-				if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_SECURE_LOAD))
-				{
-					curr_truck->tieToggle(-1);
-				}
-				if (RoR::Application::GetInputEngine()->getEventBoolValue(EV_COMMON_RESET_TRUCK) && !curr_truck->replaymode)
-				{
-					// stop any races
-					StopRaceTimer();
-					// init
-					curr_truck->reset();
-				}
-				if (RoR::Application::GetInputEngine()->getEventBoolValue(EV_COMMON_REPAIR_TRUCK))
-				{
-#ifdef USE_OPENAL
-					SoundScriptManager::getSingleton().trigOnce(curr_truck, SS_TRIG_REPAIR);
-#endif //OPENAL
-					curr_truck->reset(true);
-				}
-				//replay mode
-				if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_TOGGLE_REPLAY_MODE))
-				{
-					StopRaceTimer();
-					curr_truck->setReplayMode(!curr_truck->replaymode);
-				}
+                object_list[object_index].rotation[terrain_editing_rotation_axis] += rotation * scale * dt;
+                Vector3 rot = object_list[object_index].rotation;
+                sn->setOrientation(Quaternion(Degree(rot.x), Vector3::UNIT_X) * Quaternion(Degree(rot.y), Vector3::UNIT_Y) * Quaternion(Degree(rot.z), Vector3::UNIT_Z));
+                sn->pitch(Degree(-90));
 
-				if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_TOGGLE_CUSTOM_PARTICLES))
-				{
-					curr_truck->toggleCustomParticles();
-				}
+                if (terrain_editing_track_object)
+                {
+                    gEnv->player->setPosition(object_list[object_index].node->getPosition());
+                }
+            }
+        }
+        else
+        {
+            m_character_factory.update(dt);
+        }
+    }
+    else if (simRUNNING(s) || simPAUSED(s))
+    {
+        m_character_factory.update(dt);
+        if (gEnv->cameraManager && !gEnv->cameraManager->gameControlsLocked())
+        {
+            if (m_player_actor) // we are in a vehicle
+            {
+                if (RoR::App::GetInputEngine()->getEventBoolValue(EV_COMMON_RESET_TRUCK) && !m_player_actor->ar_replay_mode)
+                {
+                    this->StopRaceTimer();
+                    m_player_actor->RequestActorReset();
+                }
+                else if (RoR::App::GetInputEngine()->getEventBoolValue(EV_COMMON_REMOVE_CURRENT_TRUCK) && !m_player_actor->ar_replay_mode)
+                {
+                    this->StopRaceTimer();
+                    Vector3 center = m_player_actor->GetRotationCenter();
+                    this->RemovePlayerActor();
+                    gEnv->player->setPosition(center);
+                }
+                else if ((RoR::App::GetInputEngine()->getEventBoolValue(EV_COMMON_REPAIR_TRUCK) || m_advanced_vehicle_repair) && !m_player_actor->ar_replay_mode)
+                {
+                    this->StopRaceTimer();
+                    if (RoR::App::GetInputEngine()->getEventBoolValue(EV_COMMON_REPAIR_TRUCK))
+                    {
+                        m_advanced_vehicle_repair = m_advanced_vehicle_repair_timer > 1.0f;
+                    }
+                    else
+                    {
+                        m_advanced_vehicle_repair_timer = 0.0f;
+                    }
 
-				if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_SHOW_SKELETON))
-				{
-					if (curr_truck->skeleton)
-						curr_truck->hideSkeleton(true);
-					else
-						curr_truck->showSkeleton(true, true);
+                    Vector3 translation = Vector3::ZERO;
+                    float rotation = 0.0f;
 
-					curr_truck->updateVisual();
-				}
+                    if (RoR::App::GetInputEngine()->getEventBoolValue(EV_TRUCK_ACCELERATE))
+                    {
+                        translation += 2.0f * Vector3::UNIT_Y * dt;
+                    }
+                    else if (RoR::App::GetInputEngine()->getEventBoolValue(EV_TRUCK_BRAKE))
+                    {
+                        translation -= 2.0f * Vector3::UNIT_Y * dt;
+                    }
+                    if (RoR::App::GetInputEngine()->getEventBoolValue(EV_TRUCK_STEER_LEFT))
+                    {
+                        rotation += 0.5f * dt;
+                    }
+                    else if (RoR::App::GetInputEngine()->getEventBoolValue(EV_TRUCK_STEER_RIGHT))
+                    {
+                        rotation -= 0.5f * dt;
+                    }
+                    if (RoR::App::GetInputEngine()->getEventBoolValue(EV_CHARACTER_FORWARD))
+                    {
+                        float curRot = m_player_actor->getRotation();
+                        translation.x += 2.0f * cos(curRot - Ogre::Math::HALF_PI) * dt;
+                        translation.z += 2.0f * sin(curRot - Ogre::Math::HALF_PI) * dt;
+                    }
+                    else if (RoR::App::GetInputEngine()->getEventBoolValue(EV_CHARACTER_BACKWARDS))
+                    {
+                        float curRot = m_player_actor->getRotation();
+                        translation.x -= 2.0f * cos(curRot - Ogre::Math::HALF_PI) * dt;
+                        translation.z -= 2.0f * sin(curRot - Ogre::Math::HALF_PI) * dt;
+                    }
+                    if (RoR::App::GetInputEngine()->getEventBoolValue(EV_CHARACTER_SIDESTEP_RIGHT))
+                    {
+                        float curRot = m_player_actor->getRotation();
+                        translation.x += 2.0f * cos(curRot) * dt;
+                        translation.z += 2.0f * sin(curRot) * dt;
+                    }
+                    else if (RoR::App::GetInputEngine()->getEventBoolValue(EV_CHARACTER_SIDESTEP_LEFT))
+                    {
+                        float curRot = m_player_actor->getRotation();
+                        translation.x -= 2.0f * cos(curRot) * dt;
+                        translation.z -= 2.0f * sin(curRot) * dt;
+                    }
 
-				if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_TOGGLE_TRUCK_LIGHTS))
-				{
-					curr_truck->lightsToggle();
-				}
+                    if (translation != Vector3::ZERO || rotation != 0.0f)
+                    {
+                        float scale = RoR::App::GetInputEngine()->isKeyDown(OIS::KC_LMENU) ? 0.1f : 1.0f;
+                        scale *= RoR::App::GetInputEngine()->isKeyDown(OIS::KC_LSHIFT) ? 3.0f : 1.0f;
+                        scale *= RoR::App::GetInputEngine()->isKeyDown(OIS::KC_LCONTROL) ? 10.0f : 1.0f;
 
-				if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_TOGGLE_TRUCK_BEACONS))
-				{
-					curr_truck->beaconsToggle();
-				}
+                        m_player_actor->UpdateFlexbodiesFinal();
+                        m_player_actor->displace(translation * scale, rotation * scale);
 
-				//camera mode
-				if (RoR::Application::GetInputEngine()->getEventBoolValue(EV_COMMON_PRESSURE_LESS) && curr_truck)
-				{
-					if (RoR::Application::GetOverlayWrapper()) RoR::Application::GetOverlayWrapper()->showPressureOverlay(true);
-#ifdef USE_OPENAL
-					SoundScriptManager::getSingleton().trigStart(curr_truck, SS_TRIG_AIR);
-#endif // OPENAL
-					curr_truck->addPressure(-dt*10.0);
-					pressure_pressed=true;
-				} else if (RoR::Application::GetInputEngine()->getEventBoolValue(EV_COMMON_PRESSURE_MORE))
-				{
-					if (RoR::Application::GetOverlayWrapper()) RoR::Application::GetOverlayWrapper()->showPressureOverlay(true);
-#ifdef USE_OPENAL
-					SoundScriptManager::getSingleton().trigStart(curr_truck, SS_TRIG_AIR);
-#endif // OPENAL
-					curr_truck->addPressure(dt*10.0);
-					pressure_pressed=true;
-				} else if (pressure_pressed)
-				{
-#ifdef USE_OPENAL
-					SoundScriptManager::getSingleton().trigStop(curr_truck, SS_TRIG_AIR);
-#endif // OPENAL
-					pressure_pressed=false;
-					if (RoR::Application::GetOverlayWrapper()) RoR::Application::GetOverlayWrapper()->showPressureOverlay(false);
-				}
+                        m_advanced_vehicle_repair_timer = 0.0f;
+                    }
+                    else
+                    {
+                        m_advanced_vehicle_repair_timer += dt;
+                    }
 
-				if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_RESCUE_TRUCK, 0.5f) && !gEnv->network && curr_truck->driveable != AIRPLANE)
-				{
-					if (!BeamFactory::getSingleton().enterRescueTruck())
-					{
-#ifdef USE_MYGUI
-						RoR::Application::GetConsole()->putMessage(Console::CONSOLE_MSGTYPE_INFO, Console::CONSOLE_SYSTEM_NOTICE, _L("No rescue truck found!"), "warning.png");
-						RoR::Application::GetGuiManager()->PushNotification("Notice:", _L("No rescue truck found!") + TOSTRING(""));
-#endif // USE_MYGUI
-					}
-				}
+                    m_player_actor->RequestActorReset(true);
+                }
+                else
+                {
+                    // get commands
+                    // -- here we should define a maximum numbers per actor. Some actors does not have that much commands
+                    // -- available, so why should we iterate till MAX_COMMANDS?
+                    for (int i = 1; i <= MAX_COMMANDS + 1; i++)
+                    {
+                        int eventID = EV_COMMANDS_01 + (i - 1);
 
-				if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_BLINK_LEFT))
-				{
-					if (curr_truck->getBlinkType() == BLINK_LEFT)
-						curr_truck->setBlinkType(BLINK_NONE);
-					else
-						curr_truck->setBlinkType(BLINK_LEFT);
-				}
+                        m_player_actor->ar_command_key[i].playerInputValue = RoR::App::GetInputEngine()->getEventValue(eventID);
+                    }
 
-				if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_BLINK_RIGHT))
-				{
-					if (curr_truck->getBlinkType() == BLINK_RIGHT)
-						curr_truck->setBlinkType(BLINK_NONE);
-					else
-						curr_truck->setBlinkType(BLINK_RIGHT);
-				}
+                    if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_TOGGLE_FORWARDCOMMANDS))
+                    {
+                        m_player_actor->ar_forward_commands = !m_player_actor->ar_forward_commands;
+                        if (m_player_actor->ar_forward_commands)
+                        {
+                            RoR::App::GetConsole()->putMessage(Console::CONSOLE_MSGTYPE_INFO, Console::CONSOLE_SYSTEM_NOTICE, _L("forwardcommands enabled"), "information.png", 3000);
+                        }
+                        else
+                        {
+                            RoR::App::GetConsole()->putMessage(Console::CONSOLE_MSGTYPE_INFO, Console::CONSOLE_SYSTEM_NOTICE, _L("forwardcommands disabled"), "information.png", 3000);
+                        }
+                    }
+                    if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_TOGGLE_IMPORTCOMMANDS))
+                    {
+                        m_player_actor->ar_import_commands = !m_player_actor->ar_import_commands;
+                        if (m_player_actor->ar_import_commands)
+                        {
+                            RoR::App::GetConsole()->putMessage(Console::CONSOLE_MSGTYPE_INFO, Console::CONSOLE_SYSTEM_NOTICE, _L("importcommands enabled"), "information.png", 3000);
+                        }
+                        else
+                        {
+                            RoR::App::GetConsole()->putMessage(Console::CONSOLE_MSGTYPE_INFO, Console::CONSOLE_SYSTEM_NOTICE, _L("importcommands disabled"), "information.png", 3000);
+                        }
+                    }
+                    // replay mode
+                    if (m_player_actor->ar_replay_mode)
+                    {
+                        if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_REPLAY_FORWARD, 0.1f) && m_player_actor->ar_replay_pos <= 0)
+                        {
+                            m_player_actor->ar_replay_pos++;
+                        }
+                        if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_REPLAY_BACKWARD, 0.1f) && m_player_actor->ar_replay_pos > -m_player_actor->ar_replay_length)
+                        {
+                            m_player_actor->ar_replay_pos--;
+                        }
+                        if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_REPLAY_FAST_FORWARD, 0.1f) && m_player_actor->ar_replay_pos + 10 <= 0)
+                        {
+                            m_player_actor->ar_replay_pos += 10;
+                        }
+                        if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_REPLAY_FAST_BACKWARD, 0.1f) && m_player_actor->ar_replay_pos - 10 > -m_player_actor->ar_replay_length)
+                        {
+                            m_player_actor->ar_replay_pos -= 10;
+                        }
+                        if (RoR::App::GetInputEngine()->isKeyDown(OIS::KC_LMENU) && RoR::App::GetInputEngine()->isKeyDown(OIS::KC_V))
+                        {
+                        }
 
-				if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_BLINK_WARN))
-				{
-					if (curr_truck->getBlinkType() == BLINK_WARN)
-						curr_truck->setBlinkType(BLINK_NONE);
-					else
-						curr_truck->setBlinkType(BLINK_WARN);
-				}
+                        if (RoR::App::GetInputEngine()->isKeyDown(OIS::KC_LMENU))
+                        {
+                            if (m_player_actor->ar_replay_pos <= 0 && m_player_actor->ar_replay_pos >= -m_player_actor->ar_replay_length)
+                            {
+                                if (RoR::App::GetInputEngine()->isKeyDown(OIS::KC_LSHIFT) || RoR::App::GetInputEngine()->isKeyDown(OIS::KC_RSHIFT))
+                                {
+                                    m_player_actor->ar_replay_pos += RoR::App::GetInputEngine()->getMouseState().X.rel * 1.5f;
+                                }
+                                else
+                                {
+                                    m_player_actor->ar_replay_pos += RoR::App::GetInputEngine()->getMouseState().X.rel * 0.05f;
+                                }
+                                if (m_player_actor->ar_replay_pos > 0)
+                                {
+                                    m_player_actor->ar_replay_pos = 0;
+                                }
+                                if (m_player_actor->ar_replay_pos < -m_player_actor->ar_replay_length)
+                                {
+                                    m_player_actor->ar_replay_pos = -m_player_actor->ar_replay_length;
+                                }
+                            }
+                        }
+                    }
 
-			} // end of truck!=-1
-		}
+                    if (m_player_actor->ar_driveable == TRUCK)
+                    {
+                        LandVehicleSimulation::UpdateVehicle(m_player_actor, dt);
+                    }
+                    if (m_player_actor->ar_driveable == AIRPLANE)
+                    {
+                        AircraftSimulation::UpdateVehicle(m_player_actor, dt);
+                    }
+                    if (m_player_actor->ar_driveable == BOAT)
+                    {
+                        //BOAT SPECIFICS
+
+                        //throttle
+                        if (RoR::App::GetInputEngine()->isEventDefined(EV_BOAT_THROTTLE_AXIS))
+                        {
+                            float f = RoR::App::GetInputEngine()->getEventValue(EV_BOAT_THROTTLE_AXIS);
+                            // use negative values also!
+                            f = f * 2 - 1;
+                            for (int i = 0; i < m_player_actor->ar_num_screwprops; i++)
+                                m_player_actor->ar_screwprops[i]->setThrottle(-f);
+                        }
+                        if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_BOAT_THROTTLE_DOWN, 0.1f))
+                        {
+                            //throttle down
+                            for (int i = 0; i < m_player_actor->ar_num_screwprops; i++)
+                                m_player_actor->ar_screwprops[i]->setThrottle(m_player_actor->ar_screwprops[i]->getThrottle() - 0.05);
+                        }
+                        if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_BOAT_THROTTLE_UP, 0.1f))
+                        {
+                            //throttle up
+                            for (int i = 0; i < m_player_actor->ar_num_screwprops; i++)
+                                m_player_actor->ar_screwprops[i]->setThrottle(m_player_actor->ar_screwprops[i]->getThrottle() + 0.05);
+                        }
+
+                        // steer
+                        float tmp_steer_left = RoR::App::GetInputEngine()->getEventValue(EV_BOAT_STEER_LEFT);
+                        float tmp_steer_right = RoR::App::GetInputEngine()->getEventValue(EV_BOAT_STEER_RIGHT);
+                        float stime = RoR::App::GetInputEngine()->getEventBounceTime(EV_BOAT_STEER_LEFT) + RoR::App::GetInputEngine()->getEventBounceTime(EV_BOAT_STEER_RIGHT);
+                        float sum_steer = (tmp_steer_left - tmp_steer_right) * dt;
+                        // do not center the rudder!
+                        if (fabs(sum_steer) > 0 && stime <= 0)
+                        {
+                            for (int i = 0; i < m_player_actor->ar_num_screwprops; i++)
+                                m_player_actor->ar_screwprops[i]->setRudder(m_player_actor->ar_screwprops[i]->getRudder() + sum_steer);
+                        }
+                        if (RoR::App::GetInputEngine()->isEventDefined(EV_BOAT_STEER_LEFT_AXIS) && RoR::App::GetInputEngine()->isEventDefined(EV_BOAT_STEER_RIGHT_AXIS))
+                        {
+                            tmp_steer_left = RoR::App::GetInputEngine()->getEventValue(EV_BOAT_STEER_LEFT_AXIS);
+                            tmp_steer_right = RoR::App::GetInputEngine()->getEventValue(EV_BOAT_STEER_RIGHT_AXIS);
+                            sum_steer = (tmp_steer_left - tmp_steer_right);
+                            for (int i = 0; i < m_player_actor->ar_num_screwprops; i++)
+                                m_player_actor->ar_screwprops[i]->setRudder(sum_steer);
+                        }
+                        if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_BOAT_CENTER_RUDDER, 0.1f))
+                        {
+                            for (int i = 0; i < m_player_actor->ar_num_screwprops; i++)
+                                m_player_actor->ar_screwprops[i]->setRudder(0);
+                        }
+
+                        if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_BOAT_REVERSE))
+                        {
+                            for (int i = 0; i < m_player_actor->ar_num_screwprops; i++)
+                                m_player_actor->ar_screwprops[i]->toggleReverse();
+                        }
+                    }
+                    //COMMON KEYS
+
+                    if (RoR::App::GetInputEngine()->getEventBoolValue(EV_COMMON_ACCELERATE_SIMULATION))
+                    {
+                        float simulation_speed = m_actor_manager.GetSimulationSpeed() * pow(2.0f, dt / 2.0f);
+                        m_actor_manager.SetSimulationSpeed(simulation_speed);
+                        String ssmsg = _L("New simulation speed: ") + TOSTRING(Round(simulation_speed * 100.0f, 1)) + "%";
+                        RoR::App::GetConsole()->putMessage(Console::CONSOLE_MSGTYPE_INFO, Console::CONSOLE_SYSTEM_NOTICE, ssmsg, "infromation.png", 2000, false);
+                        RoR::App::GetGuiManager()->PushNotification("Notice:", ssmsg);
+                    }
+                    if (RoR::App::GetInputEngine()->getEventBoolValue(EV_COMMON_DECELERATE_SIMULATION))
+                    {
+                        float simulation_speed = m_actor_manager.GetSimulationSpeed() * pow(0.5f, dt / 2.0f);
+                        m_actor_manager.SetSimulationSpeed(simulation_speed);
+                        String ssmsg = _L("New simulation speed: ") + TOSTRING(Round(simulation_speed * 100.0f, 1)) + "%";
+                        RoR::App::GetConsole()->putMessage(Console::CONSOLE_MSGTYPE_INFO, Console::CONSOLE_SYSTEM_NOTICE, ssmsg, "infromation.png", 2000, false);
+                        RoR::App::GetGuiManager()->PushNotification("Notice:", ssmsg);
+                    }
+                    if (RoR::App::GetInputEngine()->getEventBoolValue(EV_COMMON_RESET_SIMULATION_PACE))
+                    {
+                        if (!m_is_pace_reset_pressed)
+                        {
+                            float simulation_speed = m_actor_manager.GetSimulationSpeed();
+                            if (simulation_speed != 1.0f)
+                            {
+                                m_last_simulation_speed = simulation_speed;
+                                m_actor_manager.SetSimulationSpeed(1.0f);
+                                UTFString ssmsg = _L("Simulation speed reset.");
+                                RoR::App::GetConsole()->putMessage(Console::CONSOLE_MSGTYPE_INFO, Console::CONSOLE_SYSTEM_NOTICE, ssmsg, "infromation.png", 2000, false);
+                                RoR::App::GetGuiManager()->PushNotification("Notice:", ssmsg);
+                            }
+                            else if (m_last_simulation_speed != 1.0f)
+                            {
+                                m_actor_manager.SetSimulationSpeed(m_last_simulation_speed);
+                                String ssmsg = _L("New simulation speed: ") + TOSTRING(Round(m_last_simulation_speed * 100.0f, 1)) + "%";
+                                RoR::App::GetConsole()->putMessage(Console::CONSOLE_MSGTYPE_INFO, Console::CONSOLE_SYSTEM_NOTICE, ssmsg, "infromation.png", 2000, false);
+                                RoR::App::GetGuiManager()->PushNotification("Notice:", ssmsg);
+                            }
+                        }
+                        m_is_pace_reset_pressed = true;
+                    }
+                    else
+                    {
+                        m_is_pace_reset_pressed = false;
+                    }
+                    if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_TRUCK_REMOVE))
+                    {
+                        this->RemovePlayerActor();
+                    }
+                    if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_ROPELOCK))
+                    {
+                        m_player_actor->ToggleRopes(-1);
+                    }
+                    if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_LOCK))
+                    {
+                        m_player_actor->ToggleHooks(-1, HOOK_TOGGLE, -1);
+                        //SlideNodeLock
+                        m_player_actor->ToggleSlideNodeLock();
+                    }
+                    if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_AUTOLOCK))
+                    {
+                        //unlock all autolocks
+                        m_player_actor->ToggleHooks(-2, HOOK_UNLOCK, -1);
+                    }
+                    //strap
+                    if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_SECURE_LOAD))
+                    {
+                        m_player_actor->ToggleTies(-1);
+                    }
+
+                    //replay mode
+                    if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_TOGGLE_REPLAY_MODE))
+                    {
+                        this->StopRaceTimer();
+                        m_player_actor->setReplayMode(!m_player_actor->ar_replay_mode);
+                    }
+
+                    if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_TOGGLE_CUSTOM_PARTICLES))
+                    {
+                        m_player_actor->ToggleCustomParticles();
+                    }
+
+                    if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_SHOW_SKELETON))
+                    {
+                        if (m_player_actor->ar_skeletonview_is_active)
+                            m_player_actor->HideSkeleton();
+                        else
+                            m_player_actor->ShowSkeleton(true);
+                    }
+
+                    if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_TOGGLE_TRUCK_LIGHTS))
+                    {
+                        m_player_actor->ToggleLights();
+                    }
+
+                    if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_TOGGLE_TRUCK_BEACONS))
+                    {
+                        m_player_actor->ToggleBeacons();
+                    }
+
+                    //camera mode
+                    if (RoR::App::GetInputEngine()->getEventBoolValue(EV_COMMON_PRESSURE_LESS))
+                    {
+                        if (m_pressure_pressed = m_player_actor->AddTyrePressure(dt * -10.0))
+                        {
+                            if (RoR::App::GetOverlayWrapper())
+                                RoR::App::GetOverlayWrapper()->showPressureOverlay(true);
+
+                            SOUND_START(m_player_actor, SS_TRIG_AIR);
+                        }
+                    }
+                    else if (RoR::App::GetInputEngine()->getEventBoolValue(EV_COMMON_PRESSURE_MORE))
+                    {
+                        if (m_pressure_pressed = m_player_actor->AddTyrePressure(dt * 10.0))
+                        {
+                            if (RoR::App::GetOverlayWrapper())
+                                RoR::App::GetOverlayWrapper()->showPressureOverlay(true);
+
+                            SOUND_START(m_player_actor, SS_TRIG_AIR);
+                        }
+                    }
+                    else if (m_pressure_pressed)
+                    {
+                        SOUND_STOP(m_player_actor, SS_TRIG_AIR);
+                        m_pressure_pressed = false;
+                        if (RoR::App::GetOverlayWrapper())
+                            RoR::App::GetOverlayWrapper()->showPressureOverlay(false);
+                    }
+
+                    if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_RESCUE_TRUCK, 0.5f) && !mp_connected && m_player_actor->ar_driveable != AIRPLANE)
+                    {
+                        Actor* rescuer = m_actor_manager.FetchRescueVehicle();
+                        if (rescuer == nullptr)
+                        {
+                            RoR::App::GetConsole()->putMessage(Console::CONSOLE_MSGTYPE_INFO, Console::CONSOLE_SYSTEM_NOTICE, _L("No rescue truck found!"), "warning.png");
+                            RoR::App::GetGuiManager()->PushNotification("Notice:", _L("No rescue truck found!"));
+                        }
+                        else
+                        {
+                            this->SetPlayerActor(rescuer);
+                        }
+                    }
+
+                    if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_TOGGLE_VIDEOCAMERA, 0.5f))
+                    {
+                        if (m_player_actor->GetGfxActor()->GetVideoCamState() == GfxActor::VideoCamState::VCSTATE_DISABLED)
+                        {
+                            m_player_actor->GetGfxActor()->SetVideoCamState(GfxActor::VideoCamState::VCSTATE_ENABLED_ONLINE);
+                        }
+                        else
+                        {
+                            m_player_actor->GetGfxActor()->SetVideoCamState(GfxActor::VideoCamState::VCSTATE_DISABLED);
+                        }
+                    }
+
+                    if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_BLINK_LEFT))
+                    {
+                        if (m_player_actor->getBlinkType() == BLINK_LEFT)
+                            m_player_actor->setBlinkType(BLINK_NONE);
+                        else
+                            m_player_actor->setBlinkType(BLINK_LEFT);
+                    }
+
+                    if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_BLINK_RIGHT))
+                    {
+                        if (m_player_actor->getBlinkType() == BLINK_RIGHT)
+                            m_player_actor->setBlinkType(BLINK_NONE);
+                        else
+                            m_player_actor->setBlinkType(BLINK_RIGHT);
+                    }
+
+                    if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_TRUCK_BLINK_WARN))
+                    {
+                        if (m_player_actor->getBlinkType() == BLINK_WARN)
+                            m_player_actor->setBlinkType(BLINK_NONE);
+                        else
+                            m_player_actor->setBlinkType(BLINK_WARN);
+                    }
+                }
+            }
+        }
 
 #ifdef USE_CAELUM
-		
-		if (SSETTING("Sky effects", "Caelum (best looking, slower)") == "Caelum (best looking, slower)" && (gEnv->frameListener->loading_state == TERRAIN_LOADED || gEnv->frameListener->loading_state == ALL_LOADED))
-		{
-			Real time_factor = 1000.0f;
-			Real multiplier = 10;
-			bool update_time = false;
 
-			if (RoR::Application::GetInputEngine()->getEventBoolValue(EV_SKY_INCREASE_TIME) && gEnv->terrainManager->getSkyManager())
-			{
-				update_time = true;
-			}
-			else if (RoR::Application::GetInputEngine()->getEventBoolValue(EV_SKY_INCREASE_TIME_FAST) && gEnv->terrainManager->getSkyManager())
-			{
-				time_factor *= multiplier;
-				update_time = true;
-			}
-			else if (RoR::Application::GetInputEngine()->getEventBoolValue(EV_SKY_DECREASE_TIME) && gEnv->terrainManager->getSkyManager())
-			{
-				time_factor = -time_factor;
-				update_time = true;
-			}
-			else if (RoR::Application::GetInputEngine()->getEventBoolValue(EV_SKY_DECREASE_TIME_FAST) && gEnv->terrainManager->getSkyManager())
-			{
-				time_factor *= -multiplier;
-				update_time = true;
-			}
-			else
-			{
-				time_factor = 1.0f;
-				update_time = gEnv->terrainManager->getSkyManager()->getTimeFactor() != 1.0f;
-			}
+        const bool caelum_enabled = App::gfx_sky_mode.GetActive() == GfxSkyMode::CAELUM;
+        if (caelum_enabled && (simRUNNING(s) || simPAUSED(s) || simEDITOR(s)))
+        {
+            Real time_factor = 1000.0f;
+            Real multiplier = 10;
+            bool update_time = false;
 
-			if ( update_time )
-			{
-				gEnv->terrainManager->getSkyManager()->setTimeFactor(time_factor);
-#ifdef USE_MYGUI
-				RoR::Application::GetGuiManager()->PushNotification("Notice:", _L("Time set to ") + gEnv->terrainManager->getSkyManager()->getPrettyTime());
-				RoR::Application::GetConsole()->putMessage(Console::CONSOLE_MSGTYPE_INFO, Console::CONSOLE_SYSTEM_NOTICE, _L("Time set to ") + gEnv->terrainManager->getSkyManager()->getPrettyTime(), "weather_sun.png", 1000);
-#endif // USE_MYGUI
-			}
-		}
-		
+            if (RoR::App::GetInputEngine()->getEventBoolValue(EV_SKY_INCREASE_TIME) && App::GetSimTerrain()->getSkyManager())
+            {
+                update_time = true;
+            }
+            else if (RoR::App::GetInputEngine()->getEventBoolValue(EV_SKY_INCREASE_TIME_FAST) && App::GetSimTerrain()->getSkyManager())
+            {
+                time_factor *= multiplier;
+                update_time = true;
+            }
+            else if (RoR::App::GetInputEngine()->getEventBoolValue(EV_SKY_DECREASE_TIME) && App::GetSimTerrain()->getSkyManager())
+            {
+                time_factor = -time_factor;
+                update_time = true;
+            }
+            else if (RoR::App::GetInputEngine()->getEventBoolValue(EV_SKY_DECREASE_TIME_FAST) && App::GetSimTerrain()->getSkyManager())
+            {
+                time_factor *= -multiplier;
+                update_time = true;
+            }
+            else
+            {
+                time_factor = 1.0f;
+                update_time = App::GetSimTerrain()->getSkyManager()->GetSkyTimeFactor() != 1.0f;
+            }
+
+            if (update_time)
+            {
+                App::GetSimTerrain()->getSkyManager()->SetSkyTimeFactor(time_factor);
+                RoR::App::GetGuiManager()->PushNotification("Notice:", _L("Time set to ") + App::GetSimTerrain()->getSkyManager()->GetPrettyTime());
+                RoR::App::GetConsole()->putMessage(Console::CONSOLE_MSGTYPE_INFO, Console::CONSOLE_SYSTEM_NOTICE, _L("Time set to ") + App::GetSimTerrain()->getSkyManager()->GetPrettyTime(), "weather_sun.png", 1000);
+            }
+        }
+
 #endif // USE_CAELUM
 
-		if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_TOGGLE_RENDER_MODE, 0.5f))
-		{
-			static int mSceneDetailIndex;
-			mSceneDetailIndex = (mSceneDetailIndex + 1) % 3;
-			switch (mSceneDetailIndex)
-			{
-			case 0:
-				gEnv->mainCamera->setPolygonMode(PM_SOLID);
-				break;
-			case 1:
-				gEnv->mainCamera->setPolygonMode(PM_WIREFRAME);
-				break;
-			case 2:
-				gEnv->mainCamera->setPolygonMode(PM_POINTS);
-				break;
-			}
-		}
-		
-		if (RoR::Application::GetInputEngine()->getEventBoolValue(EV_COMMON_ENTER_OR_EXIT_TRUCK) && mTimeUntilNextToggle <= 0)
-		{
-			mTimeUntilNextToggle = 0.5; // Some delay before trying to re-enter(exit) truck
-			// perso in/out
-			int current_truck = BeamFactory::getSingleton().getCurrentTruckNumber();
-			int free_truck    = BeamFactory::getSingleton().getTruckCount();
-			Beam **trucks     = BeamFactory::getSingleton().getTrucks();
-			if (current_truck == -1)
-			{
-				// find the nearest truck
-				float mindist   =  1000.0;
-				int   minindex  = -1;
-				for (int i=0; i<free_truck; i++)
-				{
-					if (!trucks[i]) continue;
-					if (!trucks[i]->driveable) continue;
-					if (trucks[i]->cinecameranodepos[0] == -1)
-					{
-						LOG("cinecam missing, cannot enter truck!");
-						continue;
-					}
-					float len = 0.0f;
-					if (gEnv->player)
-					{
-						len = trucks[i]->nodes[trucks[i]->cinecameranodepos[0]].AbsPosition.distance(gEnv->player->getPosition() + Vector3(0.0, 2.0, 0.0));
-					}
-					if (len < mindist)
-					{
-						mindist = len;
-						minindex = i;
-					}
-				}
-				if (mindist < 20.0)
-				{
-					BeamFactory::getSingleton().setCurrentTruck(minindex);
-				}
-			} else if (curr_truck->nodes[0].Velocity.length() < 1.0f)
-			{
-				BeamFactory::getSingleton().setCurrentTruck(-1);
-			} else
-			{
-				curr_truck->brake    = curr_truck->brakeforce * 0.66;
-				mTimeUntilNextToggle = 0.0; // No delay in this case: the truck must brake like braking normally
-			}
-		}
-	} else
-	{
-		//no terrain or truck loaded
 
-#ifdef USE_MYGUI
-		if (Application::GetGuiManager()->getMainSelector()->IsFinishedSelecting())
-		{
-			if (loading_state==TERRAIN_LOADED)
-			{
-				CacheEntry *selection = Application::GetGuiManager()->getMainSelector()->GetSelectedEntry();
-				Skin *skin = Application::GetGuiManager()->getMainSelector()->GetSelectedSkin();
-				std::vector<String> config = Application::GetGuiManager()->getMainSelector()->GetVehicleConfigs();
-				std::vector<String> *configptr = &config;
-				if (config.size() == 0) configptr = 0;
-				if (selection)
-					this->InitTrucks(true, selection->fname, selection->number, selection->fext, configptr, false, skin);
-				else
-					this->InitTrucks(false, "");
+        const bool skyx_enabled = App::gfx_sky_mode.GetActive() == GfxSkyMode::SKYX;
+        SkyXManager* skyx_mgr = App::GetSimTerrain()->getSkyXManager();
+        if (skyx_enabled && (skyx_mgr != nullptr) && (simRUNNING(s) || simPAUSED(s) || simEDITOR(s)))
+        {
 
-			} 
-			else if (loading_state == RELOADING)
-			{
-				CacheEntry *selection = Application::GetGuiManager()->getMainSelector()->GetSelectedEntry();
-				Skin *skin = Application::GetGuiManager()->getMainSelector()->GetSelectedSkin();
-				Beam *local_truck = nullptr;
-				if (selection != nullptr)
-				{
-					/* We load an extra truck */
-					std::vector<String> *config_ptr = nullptr;
-					std::vector<String> config = Application::GetGuiManager()->getMainSelector()->GetVehicleConfigs();
-					if (config.size() > 0)
-					{
-						config_ptr = & config;
-					}
+            if (RoR::App::GetInputEngine()->getEventBoolValue(EV_SKY_INCREASE_TIME))
+            {
+                skyx_mgr->GetSkyX()->setTimeMultiplier(1.0f);
+            }
+            else if (RoR::App::GetInputEngine()->getEventBoolValue(EV_SKY_INCREASE_TIME_FAST))
+            {
+                skyx_mgr->GetSkyX()->setTimeMultiplier(2.0f);
+            }
+            else if (RoR::App::GetInputEngine()->getEventBoolValue(EV_SKY_DECREASE_TIME))
+            {
+                skyx_mgr->GetSkyX()->setTimeMultiplier(-1.0f);
+            }
+            else if (RoR::App::GetInputEngine()->getEventBoolValue(EV_SKY_DECREASE_TIME_FAST))
+            {
+                skyx_mgr->GetSkyX()->setTimeMultiplier(-2.0f);
+            }
+            else
+            {
+                skyx_mgr->GetSkyX()->setTimeMultiplier(0.01f);
+            }
+        }
 
-					local_truck = BeamFactory::getSingleton().CreateLocalRigInstance(reload_pos, reload_dir, selection->fname, selection->number, reload_box, false, config_ptr, skin, freeTruckPosition);
-					freeTruckPosition = false; // reset this, only to be used once
-				}
+        if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_TOGGLE_RENDER_MODE, 0.5f))
+        {
+            static int mSceneDetailIndex;
+            mSceneDetailIndex = (mSceneDetailIndex + 1) % 3;
+            switch (mSceneDetailIndex)
+            {
+            case 0:
+                gEnv->mainCamera->setPolygonMode(PM_SOLID);
+                break;
+            case 1:
+                gEnv->mainCamera->setPolygonMode(PM_WIREFRAME);
+                break;
+            case 2:
+                gEnv->mainCamera->setPolygonMode(PM_POINTS);
+                break;
+            }
+        }
 
-				if (gEnv->surveyMap && local_truck)
-				{
-					SurveyMapEntity *e = gEnv->surveyMap->createNamedMapEntity("Truck"+TOSTRING(local_truck->trucknum), SurveyMapManager::getTypeByDriveable(local_truck->driveable));
-					if (e)
-					{
-						e->setState(DESACTIVATED);
-						e->setVisibility(true);
-						e->setPosition(reload_pos);
-						e->setRotation(-Radian(local_truck->getHeadingDirectionAngle()));
-					}
-				}
+        if (RoR::App::GetInputEngine()->getEventBoolValue(EV_COMMON_ENTER_OR_EXIT_TRUCK) && m_time_until_next_toggle <= 0)
+        {
+            m_time_until_next_toggle = 0.5; // Some delay before trying to re-enter(exit) actor
+            // perso in/out
+            int num_actor_slots = m_actor_manager.GetNumUsedActorSlots();
+            Actor** actor_slots = m_actor_manager.GetInternalActorSlots();
 
-				Application::GetGuiManager()->getMainSelector()->Hide();
-				loading_state = ALL_LOADED;
+            if (this->GetPlayerActor() == nullptr)
+            {
+                // find the nearest vehicle
+                float mindist = 1000.0;
+                Actor* nearest_actor = nullptr;
+                for (int i = 0; i < num_actor_slots; i++)
+                {
+                    if (!actor_slots[i])
+                        continue;
+                    if (!actor_slots[i]->ar_driveable)
+                        continue;
+                    if (actor_slots[i]->ar_cinecam_node[0] == -1)
+                    {
+                        LOG("cinecam missing, cannot enter the actor!");
+                        continue;
+                    }
+                    float len = 0.0f;
+                    if (gEnv->player)
+                    {
+                        len = actor_slots[i]->ar_nodes[actor_slots[i]->ar_cinecam_node[0]].AbsPosition.distance(gEnv->player->getPosition() + Vector3(0.0, 2.0, 0.0));
+                    }
+                    if (len < mindist)
+                    {
+                        mindist = len;
+                        nearest_actor = actor_slots[i];
+                    }
+                }
+                if (mindist < 20.0)
+                {
+                    this->SetPlayerActor(nearest_actor);
+                }
+            }
+            else if (m_player_actor->ar_nodes[0].Velocity.length() < 1.0f)
+            {
+                this->SetPlayerActor(nullptr);
+            }
+            else
+            {
+                m_player_actor->ar_brake = m_player_actor->ar_brake_force * 0.66;
+                m_time_until_next_toggle = 0.0; // No delay in this case: the vehicle must brake like braking normally
+            }
+        }
+        else if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_ENTER_NEXT_TRUCK, 0.25f))
+        {
+            this->SetPlayerActor(m_actor_manager.FetchNextVehicleOnList(m_player_actor, m_prev_player_actor));
+        }
+        else if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_ENTER_PREVIOUS_TRUCK, 0.25f))
+        {
+            this->SetPlayerActor(m_actor_manager.FetchPreviousVehicleOnList(m_player_actor, m_prev_player_actor));
+        }
+        else if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_RESPAWN_LAST_TRUCK, 0.25f))
+        {
+            if (m_last_cache_selection != nullptr)
+            {
+                /* We load an extra actor */
+                std::vector<String>* config_ptr = nullptr;
+                if (m_last_vehicle_configs.size() > 0)
+                {
+                    config_ptr = & m_last_vehicle_configs;
+                }
 
-				RoR::Application::GetGuiManager()->UnfocusGui();
+                if (m_player_actor != nullptr)
+                {
+                    m_reload_dir = Quaternion(Degree(270) - Radian(m_player_actor->getRotation()), Vector3::UNIT_Y);
+                    m_reload_pos = m_player_actor->GetRotationCenter();
 
-				if (local_truck != nullptr && local_truck->driveable != NOT_DRIVEABLE)
-				{
-					/* We are supposed to be in this truck, if it is a truck */
-					if (local_truck->engine != nullptr)
-					{
-						local_truck->engine->start();
-					}
-					BeamFactory::getSingleton().setCurrentTruck(local_truck->trucknum);
-				} 
-				else if (gEnv->player != nullptr)
-				{
-					// if it is a load or trailer, then stay in player mode
-					// but relocate to the new position, so we don't spawn the dialog again
-					gEnv->player->move(Vector3(3.0, 0.2, 0.0));
-				}
-			}
-		}
-#endif //MYGUI
-	}
+                    // TODO: Fix this by projecting m_reload_pos onto the terrain / mesh
+                    m_reload_pos.y = m_player_actor->ar_nodes[m_player_actor->ar_lowest_contacting_node].AbsPosition.y;
+                }
+                else
+                {
+                    m_reload_dir = Quaternion(Degree(180) - gEnv->player->getRotation(), Vector3::UNIT_Y);
+                    m_reload_pos = gEnv->player->getPosition();
+                }
 
+                Actor* local_actor = m_actor_manager.CreateLocalActor(m_reload_pos, m_reload_dir, m_last_cache_selection->fname, m_last_cache_selection->number, 0, config_ptr, m_last_skin_selection);
 
+                this->FinalizeActorSpawning(local_actor, m_player_actor);
+            }
+        }
+    }
+    else
+    {
+        //no terrain or actor loaded
+        terrain_editing_mode = false;
 
-	if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_TRUCK_INFO) && curr_truck)
-	{
-		mTruckInfoOn = ! mTruckInfoOn;
-		dirty=true;
-		
-		Application::GetGuiManager()->ToggleTruckInfoBox();
-	}
+        if (App::GetGuiManager()->GetMainSelector()->IsFinishedSelecting())
+        {
+            if (simSELECT(s))
+            {
+                CacheEntry* selection = App::GetGuiManager()->GetMainSelector()->GetSelectedEntry();
+                RoR::SkinDef* skin = App::GetGuiManager()->GetMainSelector()->GetSelectedSkin();
+                if (selection != nullptr)
+                {
+                    // We load an extra actor
+                    std::vector<String>* config_ptr = nullptr;
+                    std::vector<String> config = App::GetGuiManager()->GetMainSelector()->GetVehicleConfigs();
+                    if (config.size() > 0)
+                    {
+                        config_ptr = & config;
+                    }
 
-	if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_HIDE_GUI))
-	{
-		hidegui = !hidegui;
-		hideGUI(hidegui);
-		dirty=true;
-	}
+                    m_last_cache_selection = selection;
+                    m_last_skin_selection = skin;
+                    m_last_vehicle_configs = config;
 
-	if (loading_state == ALL_LOADED && RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_TOGGLE_STATS))
-	{
-		dirty=true; //What's this for?
+                    if (m_reload_box == nullptr)
+                    {
+                        if (m_player_actor != nullptr)
+                        {
+                            float rotation = m_player_actor->getRotation() - Math::HALF_PI;
+                            m_reload_dir = Quaternion(Degree(180) - Radian(rotation), Vector3::UNIT_Y);
+                            m_reload_pos = m_player_actor->GetRotationCenter();
+                            // TODO: Fix this by projecting m_reload_pos onto the terrain / mesh
+                            m_reload_pos.y = m_player_actor->ar_nodes[m_player_actor->ar_lowest_contacting_node].AbsPosition.y;
+                        }
+                        else
+                        {
+                            m_reload_dir = Quaternion(Degree(180) - gEnv->player->getRotation(), Vector3::UNIT_Y);
+                            m_reload_pos = gEnv->player->getPosition();
+                        }
+                    }
 
-		Application::GetGuiManager()->ToggleFPSBox();
-	}
+                    Actor* local_actor = m_actor_manager.CreateLocalActor(m_reload_pos, m_reload_dir, selection->fname, selection->number, m_reload_box, config_ptr, skin);
 
-	if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_TOGGLE_MAT_DEBUG))
-	{
-		if (mStatsOn==0)
-			mStatsOn=2;
-		else if (mStatsOn==1)
-			mStatsOn=2;
-		else if (mStatsOn==2)
-			mStatsOn=0;
-		dirty=true;
-		if (RoR::Application::GetOverlayWrapper()) RoR::Application::GetOverlayWrapper()->showDebugOverlay(mStatsOn);
-	}
+                    this->FinalizeActorSpawning(local_actor, m_player_actor);
+                }
+                else if (gEnv->player)
+                {
+                    gEnv->player->unwindMovement(0.1f);
+                }
 
-	if (RoR::Application::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_OUTPUT_POSITION) && loading_state == ALL_LOADED)
-	{
-		Vector3 position(Vector3::ZERO);
-		Radian rotation(0);
-		if (BeamFactory::getSingleton().getCurrentTruckNumber() == -1)
-		{
-			if (gEnv->player)
-			{
-				position = gEnv->player->getPosition();
-				rotation = gEnv->player->getRotation() + Radian(Math::PI);
-			}
-		} else
-		{
-			position = curr_truck->getPosition();
-			Vector3 idir = curr_truck->nodes[curr_truck->cameranodepos[0]].RelPosition - curr_truck->nodes[curr_truck->cameranodedir[0]].RelPosition;
-			rotation = atan2(idir.dotProduct(Vector3::UNIT_X), idir.dotProduct(-Vector3::UNIT_Z));
-		}
-		LOG("Position: " + TOSTRING(position.x) + ", "+ TOSTRING(position.y) + ", " + TOSTRING(position.z) + ", 0, " + TOSTRING(rotation.valueDegrees()) + ", 0");
-	}
+                m_reload_box = 0;
+            }
+            App::GetGuiManager()->GetMainSelector()->Hide();
+            RoR::App::GetGuiManager()->UnfocusGui();
+            App::sim_state.SetActive(SimState::RUNNING); // TODO: use pending mechanism
+        }
+    }
 
-	//update window
-	if (!RoR::Application::GetOgreSubsystem()->GetRenderWindow()->isAutoUpdated())
-	{
-		if (dirty)
-			RoR::Application::GetOgreSubsystem()->GetRenderWindow()->update();
-		else
-			sleepMilliSeconds(10);
-	}
-	// Return true to continue rendering
-	return true;
+    if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_GET_NEW_VEHICLE))
+    {
+        if ((simRUNNING(s) || simPAUSED(s) || simEDITOR(s)) && gEnv->player != nullptr)
+        {
+            App::sim_state.SetActive(SimState::SELECTING); // TODO: use pending mechanism
+
+            App::GetGuiManager()->GetMainSelector()->Show(LT_AllBeam);
+        }
+    }
+
+    if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_TRUCK_INFO) && m_player_actor)
+    {
+        m_actor_info_gui_visible = ! m_actor_info_gui_visible;
+        gui_man->GetSimUtils()->SetActorInfoBoxVisible(m_actor_info_gui_visible);
+    }
+
+    if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_TRUCK_DESCRIPTION) && m_player_actor)
+    {
+        gui_man->SetVisible_VehicleDescription(! gui_man->IsVisible_VehicleDescription());
+    }
+
+    if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_HIDE_GUI))
+    {
+        m_hide_gui = !m_hide_gui;
+        this->HideGUI(m_hide_gui);
+    }
+
+    if ((simRUNNING(s) || simPAUSED(s) || simEDITOR(s)) && RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_TOGGLE_STATS))
+    {
+        gui_man->GetSimUtils()->SetFPSBoxVisible(! gui_man->GetSimUtils()->IsFPSBoxVisible());
+    }
+
+    if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_TOGGLE_MAT_DEBUG))
+    {
+        if (m_stats_on == 0)
+            m_stats_on = 2;
+        else if (m_stats_on == 1)
+            m_stats_on = 2;
+        else if (m_stats_on == 2)
+            m_stats_on = 0;
+        if (RoR::App::GetOverlayWrapper())
+            RoR::App::GetOverlayWrapper()->showDebugOverlay(m_stats_on);
+    }
+
+    if (RoR::App::GetInputEngine()->getEventBoolValueBounce(EV_COMMON_OUTPUT_POSITION) && (simRUNNING(s) || simPAUSED(s) || simEDITOR(s)))
+    {
+        Vector3 position(Vector3::ZERO);
+        Radian rotation(0);
+        if (m_player_actor == nullptr)
+        {
+            if (gEnv->player)
+            {
+                position = gEnv->player->getPosition();
+                rotation = gEnv->player->getRotation() + Radian(Math::PI);
+            }
+        }
+        else
+        {
+            position = m_player_actor->getPosition();
+            Vector3 idir = m_player_actor->getDirection();
+            rotation = atan2(idir.dotProduct(Vector3::UNIT_X), idir.dotProduct(-Vector3::UNIT_Z));
+        }
+        LOG("Position: " + TOSTRING(position.x) + ", "+ TOSTRING(position.y) + ", " + TOSTRING(position.z) + ", 0, " + TOSTRING(rotation.valueDegrees()) + ", 0");
+    }
+
+    // Return true to continue rendering
+    return true;
 }
 
-void RoRFrameListener::shutdown_final()
+void SimController::TeleportPlayer(RoR::Terrn2Telepoint* telepoint)
 {
-	LOG(" ** Shutdown preparation");
-	
-	loading_state = EXITING;
+    if (m_player_actor != nullptr)
+        return; // Player could enter an actor while Teleport-GUI is visible
 
-	//RoR::Application::GetGuiManager()->shutdown();
-
-#ifdef USE_SOCKETW
-	if (gEnv->network) gEnv->network->disconnect();
-#endif //SOCKETW
-	
-#ifdef USE_OPENAL
-	SoundScriptManager::getSingleton().setEnabled(false);
-#endif //OPENAL
-
-	LOG(" ** Shutdown final");
-
-	if (gEnv && gEnv->terrainManager)
-	{
-		if (gEnv->terrainManager->getWater()) gEnv->terrainManager->getWater()->prepareShutdown();
-		if (gEnv->terrainManager->getEnvmap()) gEnv->terrainManager->getEnvmap()->prepareShutdown();
-	}
-	if (dashboard) dashboard->prepareShutdown();
-	if (heathaze) heathaze->prepareShutdown();
-
-	BeamFactory::getSingleton().prepareShutdown();
-
-	RoR::Application::GetInputEngine()->prepareShutdown();
-
-	// RoRFrameListener::shutdown_final() is allways called by main thread.
-	// Therefore we need no syncing here.
-	RoR::Application::GetMainThreadLogic()->RequestShutdown();
-	RoR::Application::GetMainThreadLogic()->RequestExitCurrentLoop();
+    gEnv->player->setPosition(telepoint->position);
 }
 
-void RoRFrameListener::Restart() // TODO: Remove this "restart" functionality -> broken by design.
+void SimController::TeleportPlayerXZ(float x, float z)
 {
-	LOG(" ** Restart preparation");
-	
-	//loading_state = RESTARTING; // TODO: Remove this "restart" functionality -> broken by design.
+    if (m_player_actor)
+        return; // Player could enter an actor while Teleport-GUI is visible
 
-	//RoR::Application::GetGuiManager()->shutdown();
-
-#ifdef USE_SOCKETW
-	if (gEnv->network) gEnv->network->disconnect();
-#endif //SOCKETW
-	
-#ifdef USE_OPENAL
-	SoundScriptManager::getSingleton().setEnabled(false);
-#endif //OPENAL
-
-	LOG(" ** Restarting");
-
-	if (gEnv && gEnv->terrainManager)
-	{
-		if (gEnv->terrainManager->getWater()) gEnv->terrainManager->getWater()->prepareShutdown();
-		if (gEnv->terrainManager->getEnvmap()) gEnv->terrainManager->getEnvmap()->prepareShutdown();
-	}
-	if (dashboard) dashboard->prepareShutdown();
-	if (heathaze) heathaze->prepareShutdown();
-
-	BeamFactory::getSingleton().prepareShutdown();
-
-	RoR::Application::GetInputEngine()->prepareShutdown();
-
-	// RoRFrameListener::shutdown_final() is allways called by main thread.
-	// Therefore we need no syncing here.
-	RoR::Application::GetMainThreadLogic()->RequestRestart();
-	//RoR::Application::GetMainThreadLogic()->RequestExitCurrentLoop();
+    float y = App::GetSimTerrain()->GetHeightAt(x, z);
+    gEnv->player->setPosition(Ogre::Vector3(x, y, z));
 }
 
-void RoRFrameListener::hideMap()
+void SimController::FinalizeActorSpawning(Actor* local_actor, Actor* prev_actor)
 {
-#ifdef USE_MYGUI
-	if (gEnv->surveyMap) gEnv->surveyMap->setVisibility(false);
-#endif //USE_MYGUI
-}
+    if (local_actor != nullptr)
+    {
+        if (m_reload_box == nullptr)
+        {
+            // Calculate translational offset for node[0] to align the actor's rotation center with m_reload_pos
+            Vector3 translation = m_reload_pos - local_actor->GetRotationCenter();
+            local_actor->ResetPosition(local_actor->ar_nodes[0].AbsPosition + Vector3(translation.x, 0.0f, translation.z), true);
 
+            if (local_actor->ar_driveable != NOT_DRIVEABLE || (prev_actor && prev_actor->ar_driveable != NOT_DRIVEABLE))
+            {
+                // Try to resolve collisions with other actors
+                local_actor->resolveCollisions(50.0f, prev_actor == nullptr);
+            }
+        }
 
-void RoRFrameListener::InitTrucks(
-    bool loadmanual, 
-    std::string const & selected, 
-    int cache_entry_number, // = -1 
-    std::string const & selectedExtension, // = ""
-    const std::vector<Ogre::String> *truckconfig, // = nullptr 
-    bool enterTruck, // = false 
-    Skin *skin // = nullptr
-    )
-{
-	//we load truck
-	if (loadmanual)
-	{
-		Beam *b = 0;
-		Vector3 spawnpos = gEnv->terrainManager->getSpawnPos();
-		Quaternion spawnrot = Quaternion::ZERO;
+        if (gEnv->surveyMap)
+        {
+            gEnv->surveyMap->createNamedMapEntity("Truck" + TOSTRING(local_actor->ar_instance_id), SurveyMapManager::getTypeByDriveable(local_actor->ar_driveable));
+        }
 
-		b = BeamFactory::getSingleton().CreateLocalRigInstance(spawnpos, spawnrot, selected, cache_entry_number, nullptr, false, truckconfig, skin);
+        if (local_actor->ar_driveable != NOT_DRIVEABLE)
+        {
+            // We are supposed to be in this vehicle, if it is a vehicle
+            if (local_actor->ar_engine != nullptr)
+            {
+                local_actor->ar_engine->StartEngine();
+            }
+            this->SetPlayerActor(local_actor);
+        }
 
-		if (enterTruck)
-		{
-			if (b) {
-				BeamFactory::getSingleton().setCurrentTruck(b->trucknum);
-				b->activate();
-			}
-			else
-				BeamFactory::getSingleton().setCurrentTruck(-1);
-		}
-
-#ifdef USE_MYGUI
-		if (b && gEnv->surveyMap)
-		{
-			SurveyMapEntity *e = gEnv->surveyMap->createNamedMapEntity("Truck"+TOSTRING(b->trucknum), SurveyMapManager::getTypeByDriveable(b->driveable));
-			if (e)
-			{
-				e->setState(DESACTIVATED);
-				e->setVisibility(true);
-				e->setPosition(spawnpos.x, spawnpos.z);
-				e->setRotation(-Radian(b->getHeadingDirectionAngle()));
-			}
-		}
-#endif //USE_MYGUI
-
-		if (b && b->engine)
-		{
-			b->engine->start();
-		}
-	}
-	
-	gEnv->terrainManager->loadPreloadedTrucks();
-
-	LOG("EFL: beam instanciated");
-
-	if (!enterTruck)
-	{
-		BeamFactory::getSingleton().setCurrentTruck(-1);
-	}
-
-	// fix for problem on loading
-	Beam *curr_truck = BeamFactory::getSingleton().getCurrentTruck();
-
-	if (enterTruck && curr_truck && curr_truck->free_node == 0)
-	{
-		BeamFactory::getSingleton().setCurrentTruck(-1);
-	}
-
-	//force perso start
-	if (persostart != Vector3(0,0,0) && gEnv->player)
-	{
-		gEnv->player->setPosition(persostart);
-	}
-
-	loading_state = ALL_LOADED;
-
-	if (ISETTING("OutGauge Mode", 0) > 0)
-	{
-		new OutProtocol();
-	}
-
-	LOG("initTrucks done");
-
-#ifdef USE_MYGUI
-	RoR::Application::GetGuiManager()->UnfocusGui();
-#endif //USE_MYGUI
-}
-
-
-
-
-bool RoRFrameListener::updateTruckMirrors(float dt)
-{
-	Beam *curr_truck = BeamFactory::getSingleton().getCurrentTruck();
-	if (!curr_truck) return false;
-
-	for (std::vector<VideoCamera *>::iterator it=curr_truck->vidcams.begin(); it!=curr_truck->vidcams.end(); it++)
-	{
-		(*it)->update(dt);
-	}
-	return true;
+        local_actor->UpdateFlexbodiesPrepare();
+        local_actor->UpdateFlexbodiesFinal();
+        local_actor->updateVisual();
+    }
 }
 
 // Override frameStarted event to process that (don't care about frameEnded)
-bool RoRFrameListener::frameStarted(const FrameEvent& evt)
+bool SimController::frameStarted(const FrameEvent& evt)
 {
-	float dt=evt.timeSinceLastFrame;
-	if (dt==0) return true;
-	if (dt>1.0/20.0) dt=1.0/20.0;
-	rtime+=dt; //real time
+    float dt = evt.timeSinceLastFrame;
+    if (dt == 0.0f)
+        return true;
+    dt = std::min(dt, 0.05f);
+    m_time += dt;
 
-	// update GUI
-	RoR::Application::GetInputEngine()->Capture();
+    m_actor_manager.SyncWithSimThread();
 
-	//if (gEnv->collisions) 	printf("> ground model used: %s\n", gEnv->collisions->last_used_ground_model->name);
-
-	// update OutProtocol
-	if (OutProtocol::getSingletonPtr())
-	{
-		OutProtocol::getSingleton().update(dt);
-	}
-	// the truck we use got deleted D:
-	//if (current_truck != -1 && trucks[current_truck] == 0)
-	//	BeamFactory::getSingleton().setCurrentTruck(-1);
-
-	// update network gui if required, at most every 2 seconds
-	if (gEnv->network)
-	{
-		netcheckGUITimer += dt;
-		if (netcheckGUITimer > 2)
-		{
-			checkRemoteStreamResultsChanged();
-			netcheckGUITimer=0;
-		}
-
+    const bool mp_connected = (App::mp_state.GetActive() == MpState::CONNECTED);
 #ifdef USE_SOCKETW
-#ifdef USE_MYGUI
-		// update net quality icon
-		if (gEnv->network->getNetQualityChanged())
-		{
-			GUI_Multiplayer::getSingleton().update();
-		}
-#endif // USE_MYGUI
-#endif // USE_SOCKETW
+    if (mp_connected)
+    {
+        std::vector<Networking::recv_packet_t> packets = RoR::Networking::GetIncomingStreamData();
 
-		// now update mumble 3d audio things
-#ifdef USE_MUMBLE
-		if (gEnv->player)
-		{
-			MumbleIntegration::getSingleton().update(gEnv->mainCamera->getPosition(), gEnv->player->getPosition() + Vector3(0, 1.8f, 0));
-		}
-#endif // USE_MUMBLE
-	}
+        RoR::ChatSystem::HandleStreamData(packets);
+        m_actor_manager.HandleActorStreamData(packets);
+        m_character_factory.handleStreamData(packets); // Update characters last (or else beam coupling might fail)
 
-	if (loading_state == ALL_LOADED)
-	{
-		if (gEnv->cameraManager != nullptr)
-		{
-			gEnv->cameraManager->update(dt);
-		}
-		if (gEnv->surveyMap != nullptr)
-		{
-			gEnv->surveyMap->update(dt);
-		}
-	}
-
-	// update mirrors after moving the camera as we use the camera position in mirrors
-	updateTruckMirrors(dt);
-
-#ifdef USE_OPENAL
-	// update audio listener position
-	static Vector3 lastCameraPosition;
-	Vector3 cameraSpeed = (gEnv->mainCamera->getPosition() - lastCameraPosition) / dt;
-	lastCameraPosition = gEnv->mainCamera->getPosition();
-
-	if(loading_state == ALL_LOADED)
-		SoundScriptManager::getSingleton().setCamera(gEnv->mainCamera->getPosition(), gEnv->mainCamera->getDirection(), gEnv->mainCamera->getUp(), cameraSpeed);
-#endif // USE_OPENAL
-	
-	Beam *curr_truck = BeamFactory::getSingleton().getCurrentTruck();
-
-	// terrain updates
-	if (gEnv->terrainManager)
-	{
-		// update animated objects
-		gEnv->terrainManager->update(dt);
-
-		// env map update
-		if (gEnv->terrainManager->getEnvmap())
-		{
-			if (curr_truck)
-			{
-				gEnv->terrainManager->getEnvmap()->update(curr_truck->getPosition(), curr_truck);
-			} else
-			{
-				float height = gEnv->terrainManager->getMaxTerrainSize().y;
-				if (gEnv->terrainManager->getHeightFinder())
-				{
-					height = gEnv->terrainManager->getHeightFinder()->getHeightAt(terrainxsize / 2.0f, terrainzsize / 2.0f );
-				}
-				gEnv->terrainManager->getEnvmap()->update(Vector3(terrainxsize / 2.0f, height + 50.0f, terrainzsize / 2.0f));
-			}
-		}
-
-		// water
-		if (loading_state == ALL_LOADED)
-		{
-			IWater *water = gEnv->terrainManager->getWater();
-			if (water)
-			{
-				water->setCamera(gEnv->mainCamera);
-				if (curr_truck)
-				{
-					water->moveTo(water->getHeightWaves(curr_truck->getPosition()));
-				} else
-				{
-					water->moveTo(water->getHeight());
-				}
-				water->framestep(dt);
-			}
-		}
-
-		// trigger updating of shadows etc
-#ifdef USE_CAELUM
-		SkyManager *sky = gEnv->terrainManager->getSkyManager();
-		if (sky && (gEnv->frameListener->loading_state == TERRAIN_LOADED || gEnv->frameListener->loading_state == ALL_LOADED))
-			sky->detectUpdate();
-#endif
-		
-		gEnv->terrainManager->update(dt);
-	}
-
-	//update visual - antishaking
-	if (loading_state == ALL_LOADED)
-	{
-		BeamFactory::getSingleton().updateVisual(dt); // Updates flexbodies. When using ThreadPool, it pushes tasks and also waits for them to complete (in this single call)
-
-		// add some example AI
-		//if (loadedTerrain == "simple.terrn2")
-			//BeamFactory::getSingleton().updateAI(dt);
-	}
-
-
-	if (!updateEvents(dt))
-	{
-		LOG("exiting...");
-		return false;
-	}
-
-	// update gui 3d arrow
-	if (RoR::Application::GetOverlayWrapper() && dirvisible && loading_state==ALL_LOADED)
-	{
-		RoR::Application::GetOverlayWrapper()->UpdateDirectionArrow(curr_truck, dirArrowPointed);
-	}
-
-	// one of the input modes is immediate, so setup what is needed for immediate mouse/key movement
-	if (mTimeUntilNextToggle >= 0)
-	{
-		mTimeUntilNextToggle -= dt;
-	}
-
-	if (BeamFactory::getSingleton().getCurrentTruck() == nullptr)
-		RoR::Application::GetGuiManager()->UpdateSimUtils(dt, nullptr);
-	
-	RoR::Application::GetGuiManager()->framestep(dt);
-
-	// one of the input modes is immediate, so update the movement vector
-	if (loading_state == ALL_LOADED)
-	{
-		BeamFactory::getSingleton().checkSleepingState();
-
-		// we simulate one truck, it will take care of the others (except networked ones)
-		if (!isSimPaused)
-			BeamFactory::getSingleton().calcPhysics(dt);
-
-		updateIO(dt);
-
-		//// updateGUI(dt); (refactored into pieces)
-
-		if (RoR::Application::GetOverlayWrapper() != nullptr)
-		{
-
-#ifdef USE_MYGUI
-
-			Beam** vehicles  = BeamFactory::getSingleton().getTrucks();
-			int num_vehicles = BeamFactory::getSingleton().getTruckCount();
-
-			// Update survey map
-			if (gEnv->surveyMap != nullptr && gEnv->surveyMap->getVisibility())
-			{
-				gEnv->surveyMap->Update(vehicles, num_vehicles);
-			}
-
-#endif // USE_MYGUI
-
-			Beam* vehicle = BeamFactory::getSingleton().getCurrentTruck();
-			if (vehicle != nullptr)
-			{
-				//update the truck info gui (also if not displayed!)
-				RoR::Application::GetOverlayWrapper()->truckhud->update(dt, vehicle, mTruckInfoOn);
-				RoR::Application::GetGuiManager()->UpdateSimUtils(dt, vehicle);
-#ifdef FEAT_TIMING
-				BES.updateGUI(dt);
-#endif // FEAT_TIMING
-
-#ifdef USE_MYGUI
-				// update mouse picking lines, etc
-				RoR::Application::GetSceneMouse()->update(dt);
-#endif //USE_MYGUI
-
-				if (pressure_pressed)
-				{
-					RoR::Application::GetOverlayWrapper()->UpdatePressureTexture(vehicle->getPressure());
-				}
-
-				if (IsRaceInProgress() && !RoR::Application::GetGuiManager()->GetPauseMenuVisible())
-				{
-					UpdateRacingGui(); //I really think that this should stay here.
-				}
-
-				if (vehicle->driveable == TRUCK && vehicle->engine != nullptr)
-				{
-					RoR::Application::GetOverlayWrapper()->UpdateLandVehicleHUD(vehicle, flipflop);
-				}
-				else if (vehicle->driveable == AIRPLANE)
-				{
-					RoR::Application::GetOverlayWrapper()->UpdateAerialHUD(vehicle);
-				}
-			}
-		}
-	}
-
-
-	// TODO: check if all wheels are on a certain event id
-	// wheels[nodes[i].wheelid].lastEventHandler
-
-#ifdef USE_ANGELSCRIPT
-	ScriptEngine::getSingleton().framestep(dt);
-#endif
-
-	// update network labels
-	if (gEnv->network)
-	{
-		CharacterFactory::getSingleton().updateLabels();
-	}
-
-	return true;
-}
-
-bool RoRFrameListener::frameEnded(const FrameEvent& evt)
-{
-	// TODO: IMPROVE STATS
-	if (RoR::Application::GetOverlayWrapper() && mStatsOn) RoR::Application::GetOverlayWrapper()->updateStats();
-
-	//		moveCamera();
-
-	// workaround to be able to show a single waiting sign before working on the files
-	//if (uiloader && uiloader->hasWork())
-	//	uiloader->dowork();
-
-	if (heathaze)
-	{
-		heathaze->update();
-	}
-
-#ifdef USE_SOCKETW
-	if (gEnv->network)
-	{
-		// process all packets and streams received
-		NetworkStreamManager::getSingleton().update();
-	}
+        m_netcheck_gui_timer += dt;
+        if (m_netcheck_gui_timer > 2.0f)
+        {
+            App::GetGuiManager()->GetMpClientList()->update();
+            m_netcheck_gui_timer = 0.0f;
+        }
+    }
 #endif //SOCKETW
 
-	return true;
+    RoR::App::GetInputEngine()->Capture();
+    App::GetGuiManager()->NewImGuiFrame(dt);
+    const bool is_altkey_pressed =  App::GetInputEngine()->isKeyDown(OIS::KeyCode::KC_LMENU) || App::GetInputEngine()->isKeyDown(OIS::KeyCode::KC_RMENU);
+    auto s = App::sim_state.GetActive();
+
+    //if (gEnv->collisions) 	printf("> ground model used: %s\n", gEnv->collisions->last_used_ground_model->name);
+    //
+    if ((simRUNNING(s) || simEDITOR(s)) && !simPAUSED(s))
+    {
+        m_actor_manager.UpdateFlexbodiesPrepare(); // Pushes all flexbody tasks into the thread pool 
+    }
+
+    if (OutProtocol::getSingletonPtr())
+    {
+        OutProtocol::getSingleton().Update(dt, m_player_actor);
+    }
+
+    // update network gui if required, at most every 2 seconds
+    if (mp_connected)
+    {
+        // now update mumble 3d audio things
+#ifdef USE_MUMBLE
+        if (gEnv->player)
+        {
+            // calculate orientation of avatar first
+            Ogre::Vector3 avatarDir = Ogre::Vector3(Math::Cos(gEnv->player->getRotation()), 0.0f, Math::Sin(gEnv->player->getRotation()));
+
+            App::GetMumble()->update(gEnv->mainCamera->getPosition(), gEnv->mainCamera->getDirection(), gEnv->mainCamera->getUp(),
+                gEnv->player->getPosition() + Vector3(0, 1.8f, 0), avatarDir, Ogre::Vector3(0.0f, 1.0f, 0.0f));
+        }
+#endif // USE_MUMBLE
+    }
+
+    if (simRUNNING(s) || simPAUSED(s) || simEDITOR(s))
+    {
+        if ((gEnv->cameraManager != nullptr) && (!simPAUSED(s)) && (dt != 0.f))
+        {
+            gEnv->cameraManager->Update(dt, m_player_actor, m_actor_manager.GetSimulationSpeed());
+        }
+        if (gEnv->surveyMap != nullptr)
+        {
+            gEnv->surveyMap->Update(dt, m_player_actor);
+        }
+    }
+
+#ifdef USE_OPENAL
+    // update audio listener position
+    static Vector3 lastCameraPosition;
+    Vector3 cameraSpeed = (gEnv->mainCamera->getPosition() - lastCameraPosition) / dt;
+    lastCameraPosition = gEnv->mainCamera->getPosition();
+
+    if (simRUNNING(s) || simPAUSED(s) || simEDITOR(s))
+    {
+        SoundScriptManager::getSingleton().setCamera(gEnv->mainCamera->getPosition(), gEnv->mainCamera->getDirection(), gEnv->mainCamera->getUp(), cameraSpeed);
+    }
+#endif // USE_OPENAL
+
+    if ((m_player_actor != nullptr) && (!simPAUSED(s)))
+    {
+        m_player_actor->GetGfxActor()->UpdateVideoCameras(dt);
+    }
+
+    // --- terrain updates ---
+
+    // update animated objects
+    App::GetSimTerrain()->update(dt);
+
+    // env map update
+    if (m_player_actor)
+    {
+        m_gfx_envmap.UpdateEnvMap(m_player_actor->getPosition(), m_player_actor);
+    }
+    // NOTE: Removed `else` branch which captured the middle of the map (height: ground+50m) - what was that for?? ~ only_a_ptr, 08/2017
+
+    // water
+    if (simRUNNING(s) || simPAUSED(s) || simEDITOR(s))
+    {
+        IWater* water = App::GetSimTerrain()->getWater();
+        if (water)
+        {
+            water->WaterSetCamera(gEnv->mainCamera);
+            if (m_player_actor)
+            {
+                water->SetReflectionPlaneHeight(water->CalcWavesHeight(m_player_actor->getPosition()));
+            }
+            else
+            {
+                water->SetReflectionPlaneHeight(water->GetStaticWaterHeight());
+            }
+            water->FrameStepWater(dt);
+        }
+    }
+
+    // trigger updating of shadows etc
+#ifdef USE_CAELUM
+    SkyManager* sky = App::GetSimTerrain()->getSkyManager();
+    if ((sky != nullptr) && (simRUNNING(s) || simPAUSED(s) || simEDITOR(s)))
+    {
+        sky->DetectSkyUpdate();
+    }
+#endif
+
+    SkyXManager* skyx_man = App::GetSimTerrain()->getSkyXManager();
+    if ((skyx_man != nullptr) && (simRUNNING(s) || simPAUSED(s) || simEDITOR(s)))
+    {
+       skyx_man->update(dt); // Light update
+    }
+
+    if (simRUNNING(s) || simPAUSED(s) || simEDITOR(s))
+    {
+        m_actor_manager.GetParticleManager().update();
+
+        if (m_heathaze)
+            m_heathaze->update();
+    }
+
+    if ((simRUNNING(s) || simEDITOR(s)) && !simPAUSED(s))
+    {
+        m_actor_manager.UpdateActorVisuals(dt, m_player_actor); // update visual - antishaking
+    }
+
+    if (! this->UpdateInputEvents(dt))
+    {
+        LOG("exiting...");
+        return false;
+    }
+    // CAUTION: 'updateEvents' might have changed 'm_player_actor'
+    //          TODO: This is a mess - actor updates from misc. inputs should be buffered, evaluated and executed at once, not ad-hoc ~ only_a_ptr, 07/2017
+
+    // update gui 3d arrow
+    // TODO: This is most definitely NOT necessary to do right here ~ only_a_ptr, 07/2017
+    if (RoR::App::GetOverlayWrapper() && m_is_dir_arrow_visible && (simRUNNING(s) || simPAUSED(s) || simEDITOR(s)))
+    {
+        RoR::App::GetOverlayWrapper()->UpdateDirectionArrow(m_player_actor, m_dir_arrow_pointed);
+    }
+
+    // one of the input modes is immediate, so setup what is needed for immediate mouse/key movement
+    if (m_time_until_next_toggle >= 0)
+    {
+        m_time_until_next_toggle -= dt;
+    }
+
+    RoR::App::GetGuiManager()->FrameStepGui(dt);
+
+    // CAUTION: 'FrameStepGui()' might have changed 'm_player_actor'
+    //           TODO: This is a mess - actor updates from misc. inputs should be buffered, evaluated and executed at once, not ad-hoc ~ only_a_ptr, 07/2017
+
+    App::GetGuiManager()->GetTeleport()->TeleportWindowFrameStep(
+        gEnv->player->getPosition().x, gEnv->player->getPosition().z, is_altkey_pressed);
+
+#ifdef USE_ANGELSCRIPT
+    ScriptEngine::getSingleton().framestep(dt);
+#endif
+
+    // one of the input modes is immediate, so update the movement vector
+    if (simRUNNING(s) || simPAUSED(s) || simEDITOR(s))
+    {
+        this->UpdateForceFeedback(dt);
+
+        if (RoR::App::GetOverlayWrapper() != nullptr)
+        {
+            // update survey map
+            if (gEnv->surveyMap != nullptr && gEnv->surveyMap->getVisibility())
+            {
+                Actor** vehicles = m_actor_manager.GetInternalActorSlots();
+                int num_vehicles = m_actor_manager.GetNumUsedActorSlots();
+
+                gEnv->surveyMap->UpdateVehicles(vehicles, num_vehicles);
+            }
+
+
+            if (m_player_actor != nullptr)
+            {
+                // update mouse picking lines, etc
+                RoR::App::GetSceneMouse()->update(dt);
+
+                if (m_pressure_pressed)
+                {
+                    RoR::App::GetOverlayWrapper()->UpdatePressureTexture(m_player_actor->GetTyrePressure());
+                }
+
+                if (m_race_in_progress && (App::sim_state.GetActive() != SimState::PAUSED))
+                {
+                    UpdateRacingGui(); //I really think that this should stay here.
+                }
+
+                if (m_player_actor->ar_driveable == TRUCK && m_player_actor->ar_engine != nullptr)
+                {
+                    RoR::App::GetOverlayWrapper()->UpdateLandVehicleHUD(m_player_actor);
+                }
+                else if (m_player_actor->ar_driveable == AIRPLANE)
+                {
+                    RoR::App::GetOverlayWrapper()->UpdateAerialHUD(m_player_actor);
+                }
+            }
+            RoR::App::GetGuiManager()->UpdateSimUtils(dt, m_player_actor);
+        }
+
+        if (!simPAUSED(s))
+        {
+            m_actor_manager.JoinFlexbodyTasks(); // Waits until all flexbody tasks are finished
+            m_actor_manager.UpdateActors(m_player_actor, dt);
+            m_actor_manager.UpdateFlexbodiesFinal(); // Updates the harware buffers
+        }
+
+        if (simRUNNING(s) && (App::sim_state.GetPending() == SimState::PAUSED))
+        {
+            App::GetGuiManager()->SetVisible_GamePauseMenu(true);
+            m_actor_manager.MuteAllActors();
+
+            App::sim_state.ApplyPending();
+        }
+        else if (simPAUSED(s) && (App::sim_state.GetPending() == SimState::RUNNING))
+        {
+            App::GetGuiManager()->SetVisible_GamePauseMenu(false);
+            m_actor_manager.UnmuteAllActors();
+
+            App::sim_state.ApplyPending();
+        }
+    }
+
+    App::GetGuiManager()->GetImGui().Render();
+
+    return true;
 }
 
-void RoRFrameListener::showLoad(int type, const Ogre::String &instance, const Ogre::String &box)
+bool SimController::frameRenderingQueued(const FrameEvent& evt)
 {
-	int free_truck    = BeamFactory::getSingleton().getTruckCount();
-	Beam **trucks     = BeamFactory::getSingleton().getTrucks();
-
-	// first, test if the place if clear, BUT NOT IN MULTIPLAYER
-	if (!gEnv->network)
-	{
-		collision_box_t *spawnbox = gEnv->collisions->getBox(instance, box);
-		for (int t=0; t < free_truck; t++)
-		{
-			if (!trucks[t]) continue;
-			for (int i=0; i < trucks[t]->free_node; i++)
-			{
-				if (gEnv->collisions->isInside(trucks[t]->nodes[i].AbsPosition, spawnbox))
-				{
-#ifdef USE_MYGUI
-					RoR::Application::GetConsole()->putMessage(Console::CONSOLE_MSGTYPE_INFO, Console::CONSOLE_SYSTEM_NOTICE, _L("Please clear the place first"), "error.png");
-					RoR::Application::GetGuiManager()->PushNotification("Notice:", _L("Please clear the place first") + TOSTRING(""));
-#endif // USE_MYGUI
-					gEnv->collisions->clearEventCache();
-					return;
-				}
-			}
-		}
-	}
-	reload_pos = gEnv->collisions->getPosition(instance, box);
-	reload_dir = gEnv->collisions->getDirection(instance, box);
-	reload_box = gEnv->collisions->getBox(instance, box);
-	loading_state = RELOADING;
-	hideMap();
-
-#ifdef USE_MYGUI
-	Application::GetGuiManager()->getMainSelector()->Show(LoaderType(type));
-#endif //USE_MYGUI
+    App::GetGuiManager()->GetImGui().Render();
+    return true;
 }
 
-void RoRFrameListener::setDirectionArrow(char *text, Vector3 position)
+bool SimController::frameEnded(const FrameEvent& evt)
 {
-	if (RoR::Application::GetOverlayWrapper() == nullptr) return;
+    // TODO: IMPROVE STATS
+    if (m_stats_on && RoR::App::GetOverlayWrapper())
+    {
+        RoR::App::GetOverlayWrapper()->updateStats();
+    }
 
-	if (text == nullptr)
-	{
-		RoR::Application::GetOverlayWrapper()->HideDirectionOverlay();
-		dirvisible = false;
-		dirArrowPointed = Vector3::ZERO;
-	}
-	else
-	{
-		RoR::Application::GetOverlayWrapper()->ShowDirectionOverlay(text);
-		dirvisible = true;
-		dirArrowPointed = position;
-	}
-
+    return true;
 }
 
-void RoRFrameListener::netDisconnectTruck(int number)
+void SimController::ShowLoaderGUI(int type, const Ogre::String& instance, const Ogre::String& box)
 {
-	// we will remove the truck completely
-	// TODO: fix that below!
-	//removeTruck(number);
-#ifdef USE_MYGUI
-	if (gEnv->surveyMap)
-	{
-		SurveyMapEntity *e = gEnv->surveyMap->getMapEntityByName("Truck"+TOSTRING(number));
-		if (e)
-			e->setVisibility(false);
-	}
-#endif //USE_MYGUI
+    int num_actor_slots = m_actor_manager.GetNumUsedActorSlots();
+    Actor** actor_slots = m_actor_manager.GetInternalActorSlots();
+
+    // first, test if the place if clear, BUT NOT IN MULTIPLAYER
+    if (!(App::mp_state.GetActive() == MpState::CONNECTED))
+    {
+        collision_box_t* spawnbox = gEnv->collisions->getBox(instance, box);
+        for (int t = 0; t < num_actor_slots; t++)
+        {
+            if (!actor_slots[t])
+                continue;
+            for (int i = 0; i < actor_slots[t]->ar_num_nodes; i++)
+            {
+                if (gEnv->collisions->isInside(actor_slots[t]->ar_nodes[i].AbsPosition, spawnbox))
+                {
+                    RoR::App::GetConsole()->putMessage(Console::CONSOLE_MSGTYPE_INFO, Console::CONSOLE_SYSTEM_NOTICE, _L("Please clear the place first"), "error.png");
+                    RoR::App::GetGuiManager()->PushNotification("Notice:", _L("Please clear the place first"));
+                    gEnv->collisions->clearEventCache();
+                    return;
+                }
+            }
+        }
+    }
+    m_reload_pos = gEnv->collisions->getPosition(instance, box);
+    m_reload_dir = gEnv->collisions->getDirection(instance, box);
+    m_reload_box = gEnv->collisions->getBox(instance, box);
+    App::sim_state.SetActive(SimState::SELECTING); // TODO: use 'pending' mechanism
+    if (gEnv->surveyMap)
+        gEnv->surveyMap->setVisibility(false);
+
+    App::GetGuiManager()->GetMainSelector()->Show(LoaderType(type));
+}
+
+void SimController::UpdateDirectionArrow(char* text, Vector3 position)
+{
+    if (RoR::App::GetOverlayWrapper() == nullptr)
+        return;
+
+    if (text == nullptr)
+    {
+        RoR::App::GetOverlayWrapper()->HideDirectionOverlay();
+        m_is_dir_arrow_visible = false;
+        m_dir_arrow_pointed = Vector3::ZERO;
+    }
+    else
+    {
+        RoR::App::GetOverlayWrapper()->ShowDirectionOverlay(text);
+        m_is_dir_arrow_visible = true;
+        m_dir_arrow_pointed = position;
+    }
 }
 
 /* --- Window Events ------------------------------------------ */
-void RoRFrameListener::windowResized(Ogre::RenderWindow* rw)
+void SimController::windowResized(Ogre::RenderWindow* rw)
 {
-	if (!rw) return;
-	LOG("*** windowResized");
+    if (!rw)
+        return;
+    LOG("[RoR] Received 'window resized' notification");
 
-	// Update mouse screen width/height
-	unsigned int width, height, depth;
-	int left, top;
-	rw->getMetrics(width, height, depth, left, top);
+    if (RoR::App::GetOverlayWrapper())
+        RoR::App::GetOverlayWrapper()->windowResized();
+    if (gEnv->surveyMap)
+        gEnv->surveyMap->windowResized();
 
-	if (RoR::Application::GetOverlayWrapper()) RoR::Application::GetOverlayWrapper()->windowResized();
-	if (gEnv->surveyMap) gEnv->surveyMap->windowResized();
+    //update mouse area
+    RoR::App::GetInputEngine()->windowResized(rw);
 
-	//update mouse area
-	RoR::Application::GetInputEngine()->windowResized(rw);
+    m_actor_manager.NotifyActorsWindowResized();
 }
 
 //Unattach OIS before window shutdown (very important under Linux)
-void RoRFrameListener::windowClosed(Ogre::RenderWindow* rw)
+void SimController::windowClosed(Ogre::RenderWindow* rw)
 {
-	LOG("*** windowClosed");
+    // No on-screen rendering must be performed after window is closed -> crashes!
+    LOG("[RoR|Simulation] Received \"WindowClosed\" event. Stopping rendering.");
+    m_was_app_window_closed = true;
 }
 
-void RoRFrameListener::windowMoved(Ogre::RenderWindow* rw)
+void SimController::windowMoved(Ogre::RenderWindow* rw)
 {
-	LOG("*** windowMoved");
+    LOG("*** windowMoved");
 }
 
-void RoRFrameListener::windowFocusChange(Ogre::RenderWindow* rw)
+void SimController::windowFocusChange(Ogre::RenderWindow* rw)
 {
-	LOG("*** windowFocusChange");
-	RoR::Application::GetInputEngine()->resetKeys();
+    // Too verbose
+    //LOG("*** windowFocusChange");
+    RoR::App::GetInputEngine()->resetKeys();
 }
 
-void RoRFrameListener::pauseSim(bool value)
+void SimController::HideGUI(bool hidden)
 {
-	// TODO: implement this (how to do so?)
-	static int savedmode = -1;
-	if (value && loading_state == PAUSE)
-		// already paused
-		return;
-	if (value)
-	{
-		savedmode = loading_state;
-		loading_state = PAUSE;
-		LOG("** pausing game");
-	} else if (!value && savedmode != -1)
-	{
-		loading_state = savedmode;
-		LOG("** unpausing game");
-	}
-}
+    if (m_player_actor && m_player_actor->getReplay())
+        m_player_actor->getReplay()->setHidden(hidden);
 
-void RoRFrameListener::hideGUI(bool visible)
-{
-#ifdef USE_MYGUI
-	Beam *curr_truck = BeamFactory::getSingleton().getCurrentTruck();
-	//Console *c = RoR::Application::GetConsole();
-	//if (c) c->setVisible(!visible);
-
-	if (visible)
-	{
-		if (RoR::Application::GetOverlayWrapper()) RoR::Application::GetOverlayWrapper()->showDashboardOverlays(false, curr_truck);
-		if (RoR::Application::GetOverlayWrapper()) RoR::Application::GetOverlayWrapper()->truckhud->show(false);
-		if (gEnv->surveyMap) gEnv->surveyMap->setVisibility(false);
 #ifdef USE_SOCKETW
-		if (gEnv->network) GUI_Multiplayer::getSingleton().setVisible(false);
+    if (App::mp_state.GetActive() == MpState::CONNECTED)
+    {
+        App::GetGuiManager()->SetVisible_MpClientList(!hidden);
+    }
 #endif // USE_SOCKETW
-	} else
-	{
-		if (curr_truck
-			&& gEnv->cameraManager
-			&& gEnv->cameraManager->hasActiveBehavior()
-			&& gEnv->cameraManager->getCurrentBehavior() != CameraManager::CAMERA_BEHAVIOR_VEHICLE_CINECAM)
-		{
-			if (RoR::Application::GetOverlayWrapper()) RoR::Application::GetOverlayWrapper()->showDashboardOverlays(true, curr_truck);
-		}
+
+    if (hidden)
+    {
+        if (RoR::App::GetOverlayWrapper())
+            RoR::App::GetOverlayWrapper()->showDashboardOverlays(false, m_player_actor);
+        if (gEnv->surveyMap)
+            gEnv->surveyMap->setVisibility(false);
+    }
+    else
+    {
+        if (m_player_actor
+            && gEnv->cameraManager
+            && gEnv->cameraManager->hasActiveBehavior()
+            && gEnv->cameraManager->getCurrentBehavior() != RoR::PerVehicleCameraContext::CAMCTX_BEHAVIOR_VEHICLE_CINECAM)
+        {
+            if (RoR::App::GetOverlayWrapper())
+                RoR::App::GetOverlayWrapper()->showDashboardOverlays(true, m_player_actor);
+        }
+    }
+    App::GetGuiManager()->hideGUI(hidden);
+}
+
+void SimController::RemovePlayerActor()
+{
+    Actor* actor = m_player_actor;
+    this->SetPlayerActor(nullptr);
+    m_actor_manager.RemoveActorInternal(actor->ar_instance_id);
+}
+
+void SimController::RemoveActorByCollisionBox(std::string const & ev_src_instance_name, std::string const & box_name)
+{
+    m_actor_manager.RemoveActorByCollisionBox(gEnv->collisions, ev_src_instance_name, box_name);
+}
+
+void SimController::ReloadPlayerActor()
+{
+    if (!m_player_actor)
+        return;
+    if (m_player_actor->ar_sim_state == Actor::SimState::NETWORKED_OK)
+        return;
+
+    // try to load the same actor again
+    Actor* new_actor = m_actor_manager.CreateLocalActor(m_reload_pos, m_reload_dir, m_player_actor->ar_filename, -1);
+
+    if (!new_actor)
+    {
+        RoR::App::GetConsole()->putMessage(Console::CONSOLE_MSGTYPE_INFO, Console::CONSOLE_SYSTEM_ERROR, _L("unable to load new actor: limit reached. Please restart RoR"), "error.png");
+        return;
+    }
+
+    // copy over the most basic info
+    if (m_player_actor->ar_num_nodes == new_actor->ar_num_nodes)
+    {
+        for (int i = 0; i < m_player_actor->ar_num_nodes; i++)
+        {
+            // copy over nodes attributes if the amount of them didnt change
+            new_actor->ar_nodes[i].AbsPosition = m_player_actor->ar_nodes[i].AbsPosition;
+            new_actor->ar_nodes[i].RelPosition = m_player_actor->ar_nodes[i].RelPosition;
+            new_actor->ar_nodes[i].Velocity    = m_player_actor->ar_nodes[i].Velocity;
+            new_actor->ar_nodes[i].Forces      = m_player_actor->ar_nodes[i].Forces;
+            new_actor->ar_nodes[i].initial_pos = m_player_actor->ar_nodes[i].initial_pos;
+            new_actor->ar_origin               = m_player_actor->ar_origin;
+        }
+    }
+
+    // TODO:
+    // * copy over the engine infomation
+    // * commands status
+    // * other minor stati
+
+    // notice the user about the amount of possible reloads
+    String msg = TOSTRING(new_actor->ar_instance_id) + String(" of ") + TOSTRING(MAX_ACTORS) + String(" possible reloads.");
+    RoR::App::GetConsole()->putMessage(Console::CONSOLE_MSGTYPE_INFO, Console::CONSOLE_SYSTEM_NOTICE, msg, "information.png");
+    RoR::App::GetGuiManager()->PushNotification("Notice:", msg);
+
+    this->RemovePlayerActor();
+
+    // reset the new actor (starts engine, resets gui, ...)
+    new_actor->RequestActorReset();
+
+    // enter the new actor
+    this->SetPlayerActor(new_actor);
+}
+
+bool SimController::LoadTerrain()
+{
+    // check if the resource is loaded
+    Ogre::String terrain_file = App::sim_terrain_name.GetPending();
+    if (! RoR::App::GetCacheSystem()->checkResourceLoaded(terrain_file)) // Input-output argument.
+    {
+        // fallback for terrains, add .terrn if not found and retry
+        terrain_file = Ogre::StringUtil::replaceAll(terrain_file, ".terrn2", "");
+        terrain_file = Ogre::StringUtil::replaceAll(terrain_file, ".terrn", "");
+        terrain_file = terrain_file + ".terrn2";
+        if (!RoR::App::GetCacheSystem()->checkResourceLoaded(terrain_file))
+        {
+            LOG("Terrain not found: " + terrain_file);
+            Ogre::UTFString title(_L("Terrain loading error"));
+            Ogre::UTFString msg(_L("Terrain not found: ") + terrain_file);
+            App::GetGuiManager()->ShowMessageBox(title.asUTF8(), msg.asUTF8(), true, "OK", true, false, "");
+            return false;
+        }
+    }
+
+    App::GetGuiManager()->GetLoadingWindow()->setProgress(0, _L("Loading Terrain"));
+
+    LOG("Loading terrain: " + terrain_file);
+
+    if (App::GetSimTerrain() != nullptr)
+    {
+        // remove old terrain
+        delete(App::GetSimTerrain()); // TODO: do it when leaving simulation.
+    }
+
+    App::SetSimTerrain(new TerrainManager());
+    App::GetSimTerrain()->loadTerrain(terrain_file);
+    App::sim_terrain_name.ApplyPending();
+
+    App::GetGuiManager()->FrictionSettingsUpdateCollisions();
+
+    if (gEnv->player != nullptr)
+    {
+        gEnv->player->setVisible(true);
+        gEnv->player->setPosition(App::GetSimTerrain()->getSpawnPos());
+
+        // Classic behavior, retained for compatibility.
+        // Required for maps like N-Labs or F1 Track.
+        if (!App::GetSimTerrain()->HasPredefinedActors())
+        {
+            gEnv->player->setRotation(Degree(180));
+        }
+
+        // Small hack to prevent spawning the Character in mid-air
+        for (int i = 0; i < 100; i++)
+        {
+            gEnv->player->update(0.05f);
+        }
+    }
+
+    // hide loading window
+    App::GetGuiManager()->SetVisible_LoadingWindow(false);
+    // hide wallpaper
+    MyGUI::Window* w = MyGUI::Gui::getInstance().findWidget<MyGUI::Window>("wallpaper");
+    if (w != nullptr)
+    {
+        w->setVisibleSmooth(false);
+    }
+    return true;
+}
+
+void SimController::CleanupAfterSimulation()
+{
+    if (gEnv->surveyMap)
+    {
+        gEnv->surveyMap->setVisibility(false);
+    }
+
+    App::GetGuiManager()->GetMainSelector()->Reset();
+
+    this->StopRaceTimer();
+
+    App::DestroyOverlayWrapper();
+
+    //Unload all vehicules
+    m_actor_manager.CleanUpAllActors();
+
+    delete gEnv->player;
+    gEnv->player = nullptr;
+    m_character_factory.DeleteAllRemoteCharacters();
+
+    if (App::GetSimTerrain() != nullptr)
+    {
+        // remove old terrain
+        delete(App::GetSimTerrain());
+        App::SetSimTerrain(nullptr);
+    }
+
+    App::DeleteSceneMouse();
+    App::GetGuiManager()->GetTeleport()->Reset();
+
+    App::GetGuiManager()->SetVisible_LoadingWindow(false);
+}
+
+bool SimController::SetupGameplayLoop()
+{
+    auto* loading_window = App::GetGuiManager()->GetLoadingWindow();
+
+    RoR::Log("[RoR] Loading resources...");
+
+    loading_window->setProgress(0, _L("Loading resources"));
+    App::GetContentManager()->LoadGameplayResources();
+
+    // ============================================================================
+    // Setup
+    // ============================================================================
+
+    m_actor_manager.GetParticleManager().DustManCheckAndInit(gEnv->sceneManager); // TODO: de-globalize SceneManager
+
+    int colourNum = -1;
+
 #ifdef USE_SOCKETW
-		if (gEnv->network) GUI_Multiplayer::getSingleton().setVisible(true);
+    if (App::mp_state.GetActive() == MpState::CONNECTED)
+    {
+        wchar_t tmp[255] = L"";
+        UTFString format = _L("Press %ls to start chatting");
+        swprintf(tmp, 255, format.asWStr_c_str(), ANSI_TO_WCHAR(RoR::App::GetInputEngine()->getKeyForCommand(EV_COMMON_ENTER_CHATMODE)).c_str());
+        App::GetGuiManager()->pushMessageChatBox(UTFString(tmp));
+
+        RoRnet::UserInfo info = RoR::Networking::GetLocalUserData();
+        colourNum = info.colournum;
+    }
 #endif // USE_SOCKETW
-	}
-#endif // USE_MYGUI
+
+    gEnv->player = m_character_factory.createLocal(colourNum);
+
+    // heathaze effect
+    if (App::gfx_enable_heathaze.GetActive())
+    {
+        m_heathaze = new HeatHaze();
+        m_heathaze->setEnable(true);
+    }
+
+    if (gEnv->cameraManager == nullptr)
+    {
+        // init camera manager after mygui and after we have a character
+        gEnv->cameraManager = new CameraManager();
+    }
+
+    m_gfx_envmap.SetupEnvMap();
+
+    // ============================================================================
+    // Loading map
+    // ============================================================================
+
+    if (!App::diag_preset_terrain.IsActiveEmpty())
+    {
+        App::sim_terrain_name.SetPending(App::diag_preset_terrain.GetActive());
+        App::diag_preset_terrain.SetActive("");
+    }
+
+    if (App::sim_terrain_name.IsPendingEmpty())
+    {
+        CacheEntry* selected_map = RoR::App::GetGuiManager()->GetMainSelector()->GetSelectedEntry();
+        if (selected_map != nullptr)
+        {
+            App::sim_terrain_name.SetPending(selected_map->fname.c_str());
+        }
+        else
+        {
+            LOG("No map selected. Returning to menu.");
+            App::GetGuiManager()->SetVisible_LoadingWindow(false);
+            return false;
+        }
+    }
+
+    if (! this->LoadTerrain())
+    {
+        LOG("Could not load map. Returning to menu.");
+        App::GetMainMenu()->LeaveMultiplayerServer();
+        App::GetGuiManager()->SetVisible_LoadingWindow(false);
+        return false;
+    }
+
+    App::GetGuiManager()->GetTeleport()->SetupMap(
+        &App::GetSimTerrain()->GetDef(),
+        App::GetSimTerrain()->getMaxTerrainSize(),
+        App::GetSimTerrain()->GetMinimapTextureName());
+
+    // ========================================================================
+    // Loading vehicle
+    // ========================================================================
+
+    if (!App::diag_preset_vehicle.IsActiveEmpty())
+    {
+        RoR::LogFormat("[RoR|Diag] Preselected Truck: %s", App::diag_preset_vehicle.GetActive());
+        if (!App::diag_preset_veh_config.IsActiveEmpty())
+        {
+            RoR::LogFormat("[RoR|Diag] Preselected Truck Config: %s", App::diag_preset_veh_config.GetActive());
+        }
+
+        const std::vector<Ogre::String> actor_config = std::vector<Ogre::String>(1, App::diag_preset_veh_config.GetActive());
+
+        Vector3 pos = gEnv->player->getPosition();
+        Quaternion rot = Quaternion(Degree(180) - gEnv->player->getRotation(), Vector3::UNIT_Y);
+
+        Actor* actor = m_actor_manager.CreateLocalActor(pos, rot, App::diag_preset_vehicle.GetActive(), -1, nullptr, &actor_config);
+
+        if (actor != nullptr)
+        {
+            // Calculate translational offset for node[0] to align the actor's rotation center with m_reload_pos
+            Vector3 translation = pos - actor->GetRotationCenter();
+            actor->ResetPosition(actor->ar_nodes[0].AbsPosition + Vector3(translation.x, 0.0f, translation.z), true);
+
+            actor->UpdateFlexbodiesPrepare();
+            actor->UpdateFlexbodiesFinal();
+            actor->updateVisual();
+
+            if (App::diag_preset_veh_enter.GetActive() && actor->ar_num_nodes > 0)
+            {
+                this->SetPlayerActor(actor);
+            }
+            if (actor->ar_engine)
+            {
+                actor->ar_engine->StartEngine();
+            }
+        }
+    }
+
+    App::GetSimTerrain()->LoadPredefinedActors();
+
+    // ========================================================================
+    // Extra setup
+    // ========================================================================
+
+    if (ISETTING("OutGauge Mode", 0) > 0)
+    {
+        new OutProtocol();
+    }
+
+    App::CreateOverlayWrapper();
+    App::GetOverlayWrapper()->SetupDirectionArrow();
+
+    if (App::audio_menu_music.GetActive())
+    {
+        SOUND_KILL(-1, SS_TRIG_MAIN_MENU);
+    }
+
+    App::CreateSceneMouse();
+
+    gEnv->sceneManager->setAmbientLight(Ogre::ColourValue(0.3f, 0.3f, 0.3f));
+
+    if (App::gfx_enable_dof.GetActive())
+    {
+        gEnv->cameraManager->ActivateDepthOfFieldEffect();
+    }
+
+    return true;
 }
 
-// show/hide all particle systems
-void RoRFrameListener::showspray(bool s)
+void SimController::EnterGameplayLoop()
 {
-	DustManager::getSingleton().setVisible(s);
-}
+    /* SETUP */
 
-void RoRFrameListener::setLoadingState(int value)
-{
-	loading_state = value;
-}
+    App::GetOgreSubsystem()->GetOgreRoot()->addFrameListener(this);
+    RoRWindowEventUtilities::addWindowEventListener(App::GetOgreSubsystem()->GetRenderWindow(), this);
 
-void RoRFrameListener::setNetPointToUID(int uid)
-{
-	// TODO: setup arrow
-	netPointToUID = uid;
-}
+    unsigned long timeSinceLastFrame = 1;
+    unsigned long startTime = 0;
+    unsigned long minTimePerFrame = 0;
+    unsigned long fpsLimit = App::gfx_fps_limit.GetActive();
 
+    if (fpsLimit < 10 || fpsLimit >= 200)
+    {
+        fpsLimit = 0;
+    }
 
-void RoRFrameListener::checkRemoteStreamResultsChanged()
-{
-#ifdef USE_MYGUI
-#ifdef USE_SOCKETW
-	if (BeamFactory::getSingleton().checkStreamsResultsChanged())
-		GUI_Multiplayer::getSingleton().update();
-#endif // USE_SOCKETW
-#endif // USE_MYGUI
-}
+    if (fpsLimit)
+    {
+        minTimePerFrame = 1000 / fpsLimit;
+    }
 
+    /* LOOP */
 
+    while (App::app_state.GetPending() == AppState::SIMULATION)
+    {
+        startTime = RoR::App::GetOgreSubsystem()->GetTimer()->getMilliseconds();
 
-
-bool RoRFrameListener::RTSSgenerateShadersForMaterial(String curMaterialName, String normalTextureName)
-{
-	if (!BSETTING("Use RTShader System", false)) return false;
-	bool success;
-
-	// Create the shader based technique of this material.
-	success = RTShader::ShaderGenerator::getSingleton().createShaderBasedTechnique(curMaterialName,
-			 			MaterialManager::DEFAULT_SCHEME_NAME,
-			 			RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME);
-	if (!success)
-		return false;
-
-	// Setup custom shader sub render states according to current setup.
-	MaterialPtr curMaterial = MaterialManager::getSingleton().getByName(curMaterialName);
-
-
-	// Grab the first pass render state.
-	// NOTE: For more complicated samples iterate over the passes and build each one of them as desired.
-	RTShader::RenderState* renderState = RTShader::ShaderGenerator::getSingleton().getRenderState(RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME, curMaterialName, 0);
-
-	// Remove all sub render states.
-	renderState->reset();
-
-
-#ifdef RTSHADER_SYSTEM_BUILD_CORE_SHADERS
-	// simple vertex lightning
-	/*
-	{
-		RTShader::SubRenderState* perPerVertexLightModel = RTShader::ShaderGenerator::getSingleton().createSubRenderState(RTShader::FFPLighting::Type);
-		renderState->addTemplateSubRenderState(perPerVertexLightModel);
-	}
-	*/
+#if OGRE_PLATFORM == OGRE_PLATFORM_WIN32 || OGRE_PLATFORM == OGRE_PLATFORM_LINUX
+        RoRWindowEventUtilities::messagePump();
 #endif
-#ifdef RTSHADER_SYSTEM_BUILD_EXT_SHADERS
-	if (normalTextureName.empty())
-	{
-		// SSLM_PerPixelLighting
-		RTShader::SubRenderState* perPixelLightModel = RTShader::ShaderGenerator::getSingleton().createSubRenderState(RTShader::PerPixelLighting::Type);
+        Ogre::RenderWindow* rw = RoR::App::GetOgreSubsystem()->GetRenderWindow();
+        if (rw->isClosed())
+        {
+            App::app_state.SetPending(AppState::SHUTDOWN);
+            continue;
+        }
 
-		renderState->addTemplateSubRenderState(perPixelLightModel);
-	} else
-	{
-		// SSLM_NormalMapLightingTangentSpace
-		RTShader::SubRenderState* subRenderState = RTShader::ShaderGenerator::getSingleton().createSubRenderState(RTShader::NormalMapLighting::Type);
-		RTShader::NormalMapLighting* normalMapSubRS = static_cast<RTShader::NormalMapLighting*>(subRenderState);
-
-		normalMapSubRS->setNormalMapSpace(RTShader::NormalMapLighting::NMS_TANGENT);
-		normalMapSubRS->setNormalMapTextureName(normalTextureName);
-
-		renderState->addTemplateSubRenderState(normalMapSubRS);
-	}
-	// SSLM_NormalMapLightingObjectSpace
-	/*
-	{
-		// Apply normal map only on main entity.
-		if (entity->getName() == MAIN_ENTITY_NAME)
-		{
-			RTShader::SubRenderState* subRenderState = mShaderGenerator->createSubRenderState(RTShader::NormalMapLighting::Type);
-			RTShader::NormalMapLighting* normalMapSubRS = static_cast<RTShader::NormalMapLighting*>(subRenderState);
-
-			normalMapSubRS->setNormalMapSpace(RTShader::NormalMapLighting::NMS_OBJECT);
-			normalMapSubRS->setNormalMapTextureName("Panels_Normal_Obj.png");
-
-			renderState->addTemplateSubRenderState(normalMapSubRS);
-		}
-
-		// It is secondary entity -> use simple per pixel lighting.
-		else
-		{
-			RTShader::SubRenderState* perPixelLightModel = mShaderGenerator->createSubRenderState(RTShader::PerPixelLighting::Type);
-			renderState->addTemplateSubRenderState(perPixelLightModel);
-		}
-	} */
-
+        RoR::App::GetOgreSubsystem()->GetOgreRoot()->renderOneFrame();
+#ifdef USE_SOCKETW
+        if ((App::mp_state.GetActive() == MpState::CONNECTED) && RoR::Networking::CheckError())
+        {
+            Ogre::String title = Ogre::UTFString(_L("Network fatal error: ")).asUTF8();
+            Ogre::String msg = RoR::Networking::GetErrorMessage().asUTF8();
+            App::GetGuiManager()->ShowMessageBox(title, msg, true, "OK", true, false, "");
+            App::app_state.SetPending(AppState::MAIN_MENU);
+        }
 #endif
 
-	// Invalidate this material in order to re-generate its shaders.
-	RTShader::ShaderGenerator::getSingleton().invalidateMaterial(RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME, curMaterialName);
-	return true;
+        if (!rw->isActive() && rw->isVisible())
+            rw->update(); // update even when in background !
+
+        if (fpsLimit && timeSinceLastFrame < minTimePerFrame)
+        {
+            // Sleep twice as long as we were too fast.
+            int ms = static_cast<int>((minTimePerFrame - timeSinceLastFrame) << 1);
+            std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+        }
+
+        timeSinceLastFrame = RoR::App::GetOgreSubsystem()->GetTimer()->getMilliseconds() - startTime;
+    }
+
+    App::sim_state.SetActive(SimState::OFF);
+    App::GetOgreSubsystem()->GetOgreRoot()->removeFrameListener(this); // IMPORTANT: Stop receiving render events during cleanups.
+    App::GetGuiManager()->GetLoadingWindow()->setProgress(50, _L("Unloading Terrain"), !m_was_app_window_closed); // Renders a frame
+    this->CleanupAfterSimulation();
+    RoRWindowEventUtilities::removeWindowEventListener(App::GetOgreSubsystem()->GetRenderWindow(), this);
+    // DO NOT: App::GetSceneMouse()    ->SetSimController(nullptr); -- already deleted via App::DeleteSceneMouse();      // TODO: de-globalize that object!
+    // DO NOT: App::GetOverlayWrapper()->SetSimController(nullptr); -- already deleted via App::DestroyOverlayWrapper(); // TODO: de-globalize that object!
+    gEnv->cameraManager->DisableDepthOfFieldEffect(); // TODO: de-globalize the CameraManager
 }
 
-void RoRFrameListener::RTSSgenerateShaders(Entity* entity, String normalTextureName)
+void SimController::SetPlayerActor(Actor* actor)
 {
-	if (!BSETTING("Use RTShader System", false)) return;
-	for (unsigned int i=0; i < entity->getNumSubEntities(); ++i)
-	{
-		SubEntity* curSubEntity = entity->getSubEntity(i);
-		const String& curMaterialName = curSubEntity->getMaterialName();
+    m_prev_player_actor = m_player_actor;
+    m_player_actor = actor;
 
-		RTSSgenerateShadersForMaterial(curMaterialName, normalTextureName);
-	}
+    // hide any old dashes
+    if (m_prev_player_actor && m_prev_player_actor->ar_dashboard)
+    {
+        m_prev_player_actor->ar_dashboard->setVisible3d(false);
+    }
+    // show new
+    if (m_player_actor && m_player_actor->ar_dashboard)
+    {
+        m_player_actor->ar_dashboard->setVisible3d(true);
+    }
+
+    if (m_prev_player_actor)
+    {
+        if (RoR::App::GetOverlayWrapper())
+        {
+            RoR::App::GetOverlayWrapper()->showDashboardOverlays(false, m_prev_player_actor);
+        }
+
+        SOUND_STOP(m_prev_player_actor, SS_TRIG_AIR);
+        SOUND_STOP(m_prev_player_actor, SS_TRIG_PUMP);
+    }
+
+    if (m_player_actor == nullptr)
+    {
+        // getting outside
+
+        if (m_prev_player_actor)
+        {
+            if (m_prev_player_actor->GetGfxActor()->GetVideoCamState() == GfxActor::VideoCamState::VCSTATE_ENABLED_ONLINE)
+            {
+                m_prev_player_actor->GetGfxActor()->SetVideoCamState(GfxActor::VideoCamState::VCSTATE_ENABLED_OFFLINE);
+            }
+
+            m_prev_player_actor->prepareInside(false);
+
+            // get player out of the vehicle
+            float rotation = m_prev_player_actor->getRotation() - Math::HALF_PI;
+            Vector3 position = m_prev_player_actor->ar_nodes[0].AbsPosition;
+            if (m_prev_player_actor->ar_cinecam_node[0] != -1 && m_prev_player_actor->ar_camera_node_pos[0] != -1 && m_prev_player_actor->ar_camera_node_roll[0] != -1)
+            {
+                // actor has a cinecam
+                position = m_prev_player_actor->ar_nodes[m_prev_player_actor->ar_cinecam_node[0]].AbsPosition;
+                position += -2.0 * ((m_prev_player_actor->ar_nodes[m_prev_player_actor->ar_camera_node_pos[0]].RelPosition - m_prev_player_actor->ar_nodes[m_prev_player_actor->ar_camera_node_roll[0]].RelPosition).normalisedCopy());
+                position += Vector3(0.0, -1.0, 0.0);
+            }
+
+            if (gEnv->player)
+            {
+                gEnv->player->SetActorCoupling(false);
+                gEnv->player->setRotation(Radian(rotation));
+                gEnv->player->setPosition(position);
+            }
+        }
+
+        m_force_feedback->SetEnabled(false);
+
+        TRIGGER_EVENT(SE_TRUCK_EXIT, m_prev_player_actor?m_prev_player_actor->ar_instance_id:-1);
+    }
+    else
+    {
+        // getting inside
+        if (RoR::App::GetOverlayWrapper() && ! m_hide_gui)
+        {
+            RoR::App::GetOverlayWrapper()->showDashboardOverlays(true, m_player_actor);
+        }
+
+        if (m_player_actor->GetGfxActor()->GetVideoCamState() == GfxActor::VideoCamState::VCSTATE_ENABLED_OFFLINE)
+        {
+            m_player_actor->GetGfxActor()->SetVideoCamState(GfxActor::VideoCamState::VCSTATE_ENABLED_ONLINE);
+        }
+
+        // force feedback
+        m_force_feedback->SetEnabled(m_player_actor->ar_driveable == TRUCK); //only for trucks so far
+
+        // attach player to vehicle
+        if (gEnv->player)
+        {
+            gEnv->player->SetActorCoupling(true, m_player_actor);
+        }
+
+        if (RoR::App::GetOverlayWrapper())
+        {
+            try
+            {
+                if (!m_player_actor->ar_help_panel_material.empty())
+                {
+                    OverlayManager::getSingleton().getOverlayElement("tracks/machinehelppanel")->setMaterialName(m_player_actor->ar_help_panel_material);
+                }
+                else
+                {
+                    OverlayManager::getSingleton().getOverlayElement("tracks/machinehelppanel")->setMaterialName("tracks/black");
+                }
+            }
+            catch (Ogre::Exception& ex)
+            {
+                // Report the error
+                std::stringstream msg;
+                msg << "Error, help panel material (defined in 'help' or 'guisettings/helpMaterial') could not be loaded.\n"
+                    "Exception occured, file:" << __FILE__ << ", line:" << __LINE__ << ", message:" << ex.what();
+                LOG(msg.str());
+
+                // Do not retry
+                m_player_actor->ar_help_panel_material.clear();
+            }
+        }
+
+        TRIGGER_EVENT(SE_TRUCK_ENTER, m_player_actor?m_player_actor->ar_instance_id:-1);
+    }
+
+    if (m_prev_player_actor != nullptr || m_player_actor != nullptr)
+    {
+        gEnv->cameraManager->NotifyVehicleChanged(m_prev_player_actor, m_player_actor);
+    }
+
+    m_actor_manager.UpdateSleepingState(m_player_actor, 0.f);
 }
 
-void RoRFrameListener::reloadCurrentTruck()
+void SimController::SetPlayerActorById(int actor_id)
 {
-	Beam *curr_truck = BeamFactory::getSingleton().getCurrentTruck();
-	if (!curr_truck) return;
-
-	// try to load the same truck again
-	Beam *newBeam = BeamFactory::getSingleton().CreateLocalRigInstance(reload_pos, reload_dir, curr_truck->realtruckfilename, -1);
-
-	if (!newBeam)
-	{
-#ifdef USE_MYGUI
-		RoR::Application::GetConsole()->putMessage(Console::CONSOLE_MSGTYPE_INFO, Console::CONSOLE_SYSTEM_ERROR, _L("unable to load new truck: limit reached. Please restart RoR"), "error.png");
-#endif // USE_MYGUI
-		return;
-	}
-
-	// remove the old truck
-	curr_truck->state = RECYCLE;
-
-	// copy over the most basic info
-	if (curr_truck->free_node == newBeam->free_node)
-	{
-		for (int i=0;i<curr_truck->free_node;i++)
-		{
-			// copy over nodes attributes if the amount of them didnt change
-			newBeam->nodes[i].AbsPosition = curr_truck->nodes[i].AbsPosition;
-			newBeam->nodes[i].RelPosition = curr_truck->nodes[i].RelPosition;
-			newBeam->nodes[i].Velocity    = curr_truck->nodes[i].Velocity;
-			newBeam->nodes[i].Forces      = curr_truck->nodes[i].Forces;
-			newBeam->nodes[i].iPosition   = curr_truck->nodes[i].iPosition;
-			newBeam->nodes[i].smoothpos   = curr_truck->nodes[i].smoothpos;
-		}
-	}
-
-	// TODO:
-	// * copy over the engine infomation
-	// * commands status
-	// * other minor stati
-
-	// notice the user about the amount of possible reloads
-	String msg = TOSTRING(newBeam->trucknum) + String(" of ") + TOSTRING(MAX_TRUCKS) + String(" possible reloads.");
-#ifdef USE_MYGUI
-	RoR::Application::GetConsole()->putMessage(Console::CONSOLE_MSGTYPE_INFO, Console::CONSOLE_SYSTEM_NOTICE, msg, "information.png");
-	RoR::Application::GetGuiManager()->PushNotification("Notice:", msg);
-#endif //USE_MYGUI
-
-	// dislocate the old truck, so its out of sight
-	curr_truck->resetPosition(100000, 100000, false, 100000);
-	// note: in some point in the future we would delete the truck here,
-	// but since this function is buggy we don't do it yet.
-
-	// enter the new truck
-	BeamFactory::getSingleton().setCurrentTruck(newBeam->trucknum);
+    Actor* actor = m_actor_manager.GetActorByIdInternal(actor_id);
+    if (actor != nullptr)
+    {
+        this->SetPlayerActor(actor);
+    }
 }

@@ -1,105 +1,121 @@
+# ================================================================================================ #
+#  CONFIGURATOR                                                                                    #
+#
+# This CMake listfile builds the Configurator for Rigs of Rods. This tool is allows to configure
+# various settings of the Simulator.
+#
 project(RoR_Configurator)
 
-#setup libraries
-macro(setup_lib name)
-   if(ROR_USE_${name})
-      include_directories(${${name}_INCLUDE_DIRS})
-      link_directories   (${${name}_LIBRARY_DIRS})
-      add_definitions("-DUSE_${name}")
-      set(optional_libs ${optional_libs} ${${name}_LIBRARIES})
-      #message(STATUS "${name} Enabled:      \tYES")
-      #message(STATUS "${name}_INCLUDE_DIRS: \t${${name}_INCLUDE_DIRS}")
-      #if(${${name}_LIBRARY_DIRS})
-      #   message(STATUS "${name}_LIBRARY_DIRS: \t${${name}_LIBRARY_DIRS}")
-      #endif(${${name}_LIBRARY_DIRS})
-      #message(STATUS "${name}_LIBRARIES:    \t${${name}_LIBRARIES}")
-   else()
-	   #message(STATUS "${name} Enabled:      \tNO")
-   endif(ROR_USE_${name})
-endmacro(setup_lib)
 
-if(WIN32)
-	# use precompiled stuff
-	set(wxWidgets_INCLUDE_DIRS "${ROR_DEPENDENCIES_DIR}/includes/${ARCH_DIR}/WxWidgets" CACHE PATH "The wxWidgets include path to use")
-	set(wxWidgets_LIBRARY_DIRS "${ROR_DEPENDENCIES_DIR}/libs/${ARCH_DIR}/WxWidgets/Release" CACHE PATH "The wxWidgets lib path to use")
-	set(wxWidgets_LIBRARIES    "wxbase29u.lib;wxmsw29u_core.lib;wxmsw29u_html.lib;wxbase29u_net.lib;wxmsw29u_adv.lib;wxpng.lib;wxtiff.lib;wxjpeg.lib;wxzlib.lib;wxregexu.lib;wxexpat.lib;winmm.lib;comctl32.lib;rpcrt4.lib;wsock32.lib;" CACHE STRING "The wxWidgets lib to link against")
-	add_definitions("-D_UNICODE -D_CRT_SECURE_NO_WARNINGS -DUNICODE")
-	include_directories(${wxWidgets_INCLUDE_DIRS})
-	link_directories (${wxWidgets_LIBRARY_DIRS})
-else(WIN32)
-	# find wxwidgets
-	SET(wxWidgets_USE_UNICODE ON)
-	FIND_PACKAGE(wxWidgets REQUIRED COMPONENTS base core html net adv)
-	include( ${wxWidgets_USE_FILE} )
-	#include_directories(${wxWidgets_INCLUDE_DIRS})
-	#add_definitions("-D${wxWidgets_DEFINITIONS}" ${wxWidgets_CXX_FLAGS})
-	#link_directories (${wxWidgets_LIB_DIR})
-endif(WIN32)
+if (WIN32)
+    set(OS_LIBS "${PThread_LIBRARIES};dinput8.lib;dxguid.lib")
+    set(OS_SOURCE "icon.rc")
 
-IF(WIN32)
-   include_directories(${Boost_INCLUDE_DIRS})
-   link_directories   (${Boost_LIBRARY_DIRS})
-   include_directories(${PThread_INCLUDE_DIRS})
-   link_directories   (${PThread_LIBRARY_DIRS})
+    # disable some annoying VS warnings:
+    # warning C4244: 'initializing' : conversion from 'const float' to 'int', possible loss of data
+    # warning C4305: 'initializing' : truncation from 'double' to 'const float'
+    add_definitions("/wd4305 /wd4244")
+elseif (UNIX)
+    find_package(PkgConfig)
+    PKG_CHECK_MODULES(GTK gtk+-2.0 REQUIRED)
+    include_directories(${GTK_INCLUDE_DIRS})
 
-   set(OS_LIBS "${PThread_LIBRARIES};dinput8.lib;dxguid.lib")
-   set(OS_SOURCE "icon.rc")
+    set(OS_LIBS)
 
-   # disable some annoying VS warnings:
-   # warning C4244: 'initializing' : conversion from 'const float' to 'int', possible loss of data
-   # warning C4305: 'initializing' : truncation from 'double' to 'const float'
-   add_definitions("/wd4305 /wd4244")
+endif ()
 
+file(GLOB sources "*.cpp")
+file(GLOB headers "*.h")
 
-   #now: delay loading for opencl
-   if(ROR_USE_OPENCL)
-      set(CMAKE_EXE_LINKER_FLAGS_DEBUG          "${CMAKE_EXE_LINKER_FLAGS_DEBUG}          /DELAYLOAD:OpenCL.dll")
-      set(CMAKE_EXE_LINKER_FLAGS_RELEASE        "${CMAKE_EXE_LINKER_FLAGS_RELEASE}        /DELAYLOAD:OpenCL.dll")
-      set(CMAKE_EXE_LINKER_FLAGS_MINSIZEREL     "${CMAKE_EXE_LINKER_FLAGS_MINSIZEREL}     /DELAYLOAD:OpenCL.dll")
-      set(CMAKE_EXE_LINKER_FLAGS_RELWITHDEBINFO "${CMAKE_EXE_LINKER_FLAGS_RELWITHDEBINFO} /DELAYLOAD:OpenCL.dll")
-      set(OS_LIBS ${OS_LIBS} Delayimp.lib)
-   endif(ROR_USE_OPENCL)
-   
-   setup_lib(CRASHRPT)
-ELSEIF(UNIX)
-   find_package(PkgConfig)
-   PKG_CHECK_MODULES  (GTK gtk+-2.0 REQUIRED)
-   INCLUDE_DIRECTORIES(${GTK_INCLUDE_DIRS})
-
-   PKG_CHECK_MODULES  (Ogre OGRE REQUIRED)
-   PKG_CHECK_MODULES  (Ois OIS REQUIRED)
-
-   set(OS_LIBS "")
-
-ENDIF(WIN32)
-
-setup_lib(OPENCL)
-setup_lib(OPENAL)
-include_directories(${Boost_INCLUDE_DIRS})
-link_directories   (${Boost_LIBRARY_DIRS})
-include_directories(${Ogre_INCLUDE_DIRS})
-link_directories   (${Ogre_LIBRARY_DIRS})
-include_directories(${Ois_INCLUDE_DIRS})
-link_directories   (${Ois_LIBRARY_DIRS})
-include_directories(${RoR_SOURCE_DIR}/source/protocol)
-include_directories(${MYGUI_INCLUDE_DIRS})
+include_directories(../main/)
+include_directories(../main/network/)
+include_directories(../main/utils/)
 
 add_definitions("-DNOOGRE -D_UNICODE")
-include_directories(../main/)
-include_directories(../main/utils/)
-include_directories(../main/network/protocol)
 
-FILE(GLOB sources "*.cpp")
-FILE(GLOB headers "*.h")
+# TODO OpenCL
 
-IF(WIN32)
-	add_executable(RoRConfig WIN32 ${sources} ${headers} ${OS_SOURCE} ../main/utils/Settings.cpp ../main/utils/SHA1.cpp ../main/utils/ErrorUtils.cpp ../main/utils/Utils.cpp)
-	TARGET_LINK_LIBRARIES(RoRConfig Version.lib)
-ELSE(WIN32)
-	add_executable(RoRConfig ${sources} ${headers} ${OS_SOURCE} ../main/utils/Settings.cpp ../main/utils/SHA1.cpp ../main/utils/ErrorUtils.cpp ../main/utils/Utils.cpp)
-ENDIF(WIN32)
-
-TARGET_LINK_LIBRARIES(RoRConfig ${Ogre_LIBRARIES} ${Ois_LIBRARIES} ${OS_LIBS} ${optional_libs} ${wxWidgets_LIBRARIES} ${Boost_LIBRARIES})
+# TODO GTK
 
 
+if (WIN32)
+    add_executable(RoRConfig WIN32 ${sources} ${headers} ${OS_SOURCE} ../main/utils/SHA1.cpp ../main/utils/ErrorUtils.cpp)
+    target_link_libraries(RoRConfig PRIVATE Version.lib)
+else (WIN32)
+    add_definitions("-fPIC")
+    add_executable(RoRConfig ${sources} ${headers} ${OS_SOURCE}../main/utils/SHA1.cpp ../main/utils/ErrorUtils.cpp)
+ENDIF (WIN32)
 
+
+if(CONAN_WXWIDGETS_ROOT AND WIN32)
+  # wxwidgets from Conan
+  target_include_directories(RoRConfig PRIVATE CONAN_PKG::wxwidgets)
+  target_link_libraries(RoRConfig PRIVATE CONAN_PKG::wxwidgets)
+elseif(wxWidgets_FOUND)
+  set(wxWidgets_USE_UNICODE ON)
+  include(${wxWidgets_USE_FILE})
+  target_link_libraries(RoRConfig PRIVATE ${wxWidgets_LIBRARIES})
+else()
+  message(FATAL_ERROR "wxwidgets not found!")
+endif()
+
+target_link_libraries(RoRConfig PRIVATE
+        ${OGRE_LIBRARIES}
+        ${OGRE_Paging_LIBRARIES}
+        ${OGRE_RTShaderSystem_LIBRARIES}
+        ${OGRE_Terrain_LIBRARIES}
+        )
+target_include_directories(RoRConfig PRIVATE
+        ${OGRE_INCLUDE_DIRS}
+        ${OGRE_Paging_INCLUDE_DIRS}
+        ${OGRE_RTShaderSystem_INCLUDE_DIRS}
+        ${OGRE_Terrain_INCLUDE_DIRS}
+        )
+if (OGRE_VERSION VERSION_GREATER 1.8)
+    target_link_libraries(RoRConfig PRIVATE ${OGRE_Overlay_LIBRARIES})
+    target_include_directories(RoRConfig PRIVATE ${OGRE_Overlay_INCLUDE_DIRS})
+endif ()
+
+target_link_libraries(RoRConfig PRIVATE ${OIS_LIBRARIES})
+target_include_directories(RoRConfig PRIVATE ${OIS_INCLUDE_DIRS})
+
+target_link_libraries(RoRConfig PRIVATE
+        MyGUI::MyGUI
+        MyGUI::OgrePlatform
+        )
+target_compile_definitions(RoRConfig PRIVATE
+        USE_MYGUI
+        $<$<PLATFORM_ID:WINDOWS>:MYGUI_STATIC>
+        )
+
+# OpenAL - audio library
+if(CONAN_WXWIDGETS_ROOT)
+  target_link_libraries(RoRConfig PRIVATE CONAN_PKG::openal)
+  target_include_directories(RoRConfig PRIVATE CONAN_PKG::openal)
+  target_compile_definitions(RoRConfig PRIVATE USE_OPENAL)
+else ()
+  if (OPENAL_FOUND)
+      target_link_libraries(RoRConfig PRIVATE ${OPENAL_LIBRARY})
+      target_include_directories(RoRConfig PRIVATE ${OPENAL_INCLUDE_DIR})
+      target_compile_definitions(RoRConfig PRIVATE USE_OPENAL)
+  else ()
+      message(WARNING "Building RoRConfig without OpenAL. Some functionality may be missing.")
+  endif ()
+endif ()
+
+target_link_libraries(RoRConfig PRIVATE
+        ${OS_LIBS}
+        ${optional_libs}
+        version_info
+)
+
+set_target_properties(RoRConfig PROPERTIES COTIRE_ADD_UNITY_BUILD FALSE)
+cotire(RoRConfig)
+
+IF (UNIX)
+  INSTALL(TARGETS RoRConfig
+          RUNTIME DESTINATION games/RoR
+          LIBRARY DESTINATION games/RoR
+          ARCHIVE DESTINATION games/RoR
+  )
+ENDIF (UNIX)

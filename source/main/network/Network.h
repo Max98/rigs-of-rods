@@ -1,117 +1,115 @@
 /*
-This source file is part of Rigs of Rods
-Copyright 2005-2012 Pierre-Michel Ricordel
-Copyright 2007-2012 Thomas Fischer
+    This source file is part of Rigs of Rods
+    Copyright 2005-2012 Pierre-Michel Ricordel
+    Copyright 2007-2012 Thomas Fischer
+    Copyright 2013-2016 Petr Ohlidal
 
-For more information, see http://www.rigsofrods.com/
+    For more information, see http://www.rigsofrods.org/
 
-Rigs of Rods is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License version 3, as
-published by the Free Software Foundation.
+    Rigs of Rods is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License version 3, as
+    published by the Free Software Foundation.
 
-Rigs of Rods is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
+    Rigs of Rods is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+    GNU General Public License for more details.
 
-You should have received a copy of the GNU General Public License
-along with Rigs of Rods.  If not, see <http://www.gnu.org/licenses/>.
+    You should have received a copy of the GNU General Public License
+    along with Rigs of Rods. If not, see <http://www.gnu.org/licenses/>.
 */
-#ifdef USE_SOCKETW
 
 #pragma once
-#ifndef __Network_H_
-#define __Network_H_
 
+#ifdef USE_SOCKETW
+
+#include "Application.h"
+#include "RoRnet.h"
 #include "RoRPrerequisites.h"
 
-#include "rornet.h"
-#include "SocketW.h"
+namespace RoR {
+namespace Networking {
 
-#include <pthread.h>
+// ----------------------- Network messages (packed) -------------------------
 
-class Network : public ZeroedMemoryAllocator
+#pragma pack(push, 1)
+
+enum CharacterCmd
 {
-public:
-
-	Network(Ogre::String servername, long server_port);
-	~Network();
-
-	// messaging functions
-	int sendMessageRaw(SWInetSocket *socket, char *content, unsigned int msgsize);
-	int sendmessage(SWInetSocket *socket, int type, unsigned int streamid, unsigned int len, char* content);
-	int sendScriptMessage(char* content, unsigned int len);
-	int receivemessage(SWInetSocket *socket, header_t *header, char* content, unsigned int bufferlen);
-
-	// methods
-	bool connect();
-	void disconnect();
-	void netFatalError(Ogre::UTFString error, bool exit=true);
-
-	void sendthreadstart();
-	void receivethreadstart();
-
-	bool getNetQualityChanged();
-	Ogre::UTFString getNickname(bool colour=false);
-	char *getTerrainName() { return server_settings.terrain; };
-	client_t *getClientInfo(unsigned int uid);
-	int getClientInfos(client_t c[MAX_PEERS]);
-	int getNetQuality(bool ack=false);
-	int getSpeedDown();
-	int getSpeedUp();
-	static unsigned long getNetTime();
-	unsigned int getUserID() { return myuid; };
-	user_info_t *getLocalUserData() { return &userdata; };
-
-	static unsigned int getUID() { return myuid; };
-
-	static void debugPacket(const char *name, header_t *header, char *buffer);
-
-private:
-
-	Ogre::UTFString m_server_name;
-	Ogre::UTFString nickname;
-	SWInetSocket socket;
-	bool initiated;
-	bool shutdown;
-	char sendthreadstart_buffer[MAX_MESSAGE_LENGTH];
-	char* send_buffer;
-	client_t clients[MAX_PEERS];
-	int last_time;
-	int myauthlevel;
-	int rconauthed;
-	int send_buffer_len;
-	int speed_bytes_sent, speed_bytes_sent_tmp, speed_bytes_recv, speed_bytes_recv_tmp;
-	int speed_time;
-	long m_server_port;
-	oob_t send_oob;
-	pthread_cond_t send_work_cv;
-	pthread_mutex_t clients_mutex;
-	pthread_mutex_t dl_data_mutex;
-	pthread_mutex_t msgsend_mutex;
-	pthread_mutex_t send_work_mutex;
-	pthread_t downloadthread;
-	pthread_t receivethread;
-	pthread_t sendthread;
-	server_info_t server_settings;
-	static Ogre::Timer timer;
-	static unsigned int myuid;
-	std::map<int, float> lagDataClients;
-	user_info_t userdata;
-
-	void calcSpeed();
-	void updatePlayerList();
-
-	Ogre::UTFString getUserChatName(client_t *c);
-
-	// mutex'ed data
-	bool net_quality_changed;
-	int net_quality;
-	pthread_mutex_t mutex_data;
-
-	void setNetQuality(int q);
+    CHARACTER_CMD_INVALID,
+    CHARACTER_CMD_POSITION,
+    CHARACTER_CMD_ATTACH,
+    CHARACTER_CMD_DETACH
 };
 
-#endif // __Network_H_
+struct CharacterMsgGeneric
+{
+    int32_t command;
+};
+
+struct CharacterMsgPos
+{
+    int32_t command;
+    float   pos_x, pos_y, pos_z;
+    float   rot_angle;
+    float   anim_time;
+    char    anim_name[CHARACTER_ANIM_NAME_LEN];
+};
+
+struct CharacterMsgAttach
+{
+    int32_t command;
+    int32_t source_id;
+    int32_t stream_id;
+    int32_t position;
+};
+
+struct recv_packet_t
+{
+    RoRnet::Header header;
+    char buffer[RORNET_MAX_MESSAGE_LENGTH];
+};
+
+#pragma pack(pop)
+
+// ------------------------ End of network messages --------------------------
+
+enum class ConnectState
+{
+    IDLE,
+    WORKING,
+    SUCCESS,
+    FAILURE
+};
+
+typedef Str<100> StatusStr;
+
+bool                 StartConnecting();             ///< Launches connecting on background.
+ConnectState         CheckConnectingState();        ///< Reports state of background connecting and updates GVar 'mp_state'
+void                 Disconnect();
+
+void                 AddPacket(int streamid, int type, int len, char *content);
+void                 AddLocalStream(RoRnet::StreamRegister *reg, int size);
+
+std::vector<recv_packet_t> GetIncomingStreamData();
+
+int                  GetUID();
+int                  GetNetQuality();
+
+Ogre::String         GetTerrainName();
+
+int                  GetUserColor();
+Ogre::UTFString      GetUsername();
+RoRnet::UserInfo     GetLocalUserData();
+std::vector<RoRnet::UserInfo> GetUserInfos();
+bool                 GetUserInfo(int uid, RoRnet::UserInfo &result);
+Ogre::ColourValue    GetPlayerColor(int color_num);
+
+Ogre::UTFString      GetErrorMessage();
+StatusStr            GetStatusMessage();
+bool                 CheckError();
+
+} // namespace Networking
+} // namespace RoR
 
 #endif // USE_SOCKETW

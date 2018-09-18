@@ -1,546 +1,664 @@
 /*
-This source file is part of Rigs of Rods
-Copyright 2005-2012 Pierre-Michel Ricordel
-Copyright 2007-2012 Thomas Fischer
+    This source file is part of Rigs of Rods
+    Copyright 2005-2012 Pierre-Michel Ricordel
+    Copyright 2007-2012 Thomas Fischer
+    Copyright 2013-2017 Petr Ohlidal & contributors
 
-For more information, see http://www.rigsofrods.com/
+    For more information, see http://www.rigsofrods.org/
 
-Rigs of Rods is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License version 3, as
-published by the Free Software Foundation.
+    Rigs of Rods is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License version 3, as
+    published by the Free Software Foundation.
 
-Rigs of Rods is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
+    Rigs of Rods is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+    GNU General Public License for more details.
 
-You should have received a copy of the GNU General Public License
-along with Rigs of Rods.  If not, see <http://www.gnu.org/licenses/>.
+    You should have received a copy of the GNU General Public License
+    along with Rigs of Rods. If not, see <http://www.gnu.org/licenses/>.
 */
+
 #include "TerrainGeometryManager.h"
 
+#include "Application.h"
 #include "Language.h"
-#include "LoadingWindow.h"
+#include "GUIManager.h"
+#include "GUI_LoadingWindow.h"
 #include "TerrainManager.h"
+#include "ShadowManager.h"
+#include "OgreTerrainPSSMMaterialGenerator.h"
+#include "OTCFileformat.h"
+#include "Utils.h"
+
+#include <OgreLight.h>
+#include <OgreTerrainGroup.h>
 
 using namespace Ogre;
+using namespace RoR;
+
+#define CUSTOM_MAT_PROFILE_NAME "Terrn2CustomMat"
+
+/// @author: http://www.ogre3d.org/forums/viewtopic.php?f=5&t=72455
+class Terrn2CustomMaterial : public Ogre::TerrainMaterialGenerator
+{
+public:
+
+    Terrn2CustomMaterial(Ogre::String materialName, bool addNormalmap, bool cloneMaterial) 
+      : m_material_name(materialName), m_add_normal_map(addNormalmap), m_clone_material(cloneMaterial)
+    {
+        mProfiles.push_back(OGRE_NEW Profile(this, CUSTOM_MAT_PROFILE_NAME, "Renders RoR terrn2 with custom material"));
+        this->setActiveProfile(CUSTOM_MAT_PROFILE_NAME);
+    }
+
+    void setMaterialByName(const Ogre::String materialName)
+    {
+        m_material_name = materialName;
+        this->_markChanged();
+    };
+
+    class Profile : public Ogre::TerrainMaterialGenerator::Profile
+    {
+    public:
+        Profile(Ogre::TerrainMaterialGenerator* parent, const Ogre::String& name, const Ogre::String& desc)
+        : Ogre::TerrainMaterialGenerator::Profile(parent, name, desc)
+        {
+        };
+        ~Profile() override {};
+
+        bool               isVertexCompressionSupported () const { return false; }
+        void               setLightmapEnabled           (bool set) /*override*/ {} // OGRE 1.8 doesn't have this method
+        Ogre::MaterialPtr  generate                     (const Ogre::Terrain* terrain) override;
+        Ogre::uint8        getMaxLayers                 (const Ogre::Terrain* terrain) const override { return 0; };
+        void               updateParams                 (const Ogre::MaterialPtr& mat, const Ogre::Terrain* terrain) override {};
+        void               updateParamsForCompositeMap  (const Ogre::MaterialPtr& mat, const Ogre::Terrain* terrain) override {};
+
+        Ogre::MaterialPtr generateForCompositeMap(const Ogre::Terrain* terrain) override
+        {
+            return terrain->_getCompositeMapMaterial();
+        };
+
+        void requestOptions(Ogre::Terrain* terrain) override
+        {
+            terrain->_setMorphRequired(false);
+            terrain->_setNormalMapRequired(true); // enable global normal map
+            terrain->_setLightMapRequired(false);
+            terrain->_setCompositeMapRequired(false);
+        };
+    };
+
+protected:
+    Ogre::String m_material_name;
+    bool m_clone_material;
+    bool m_add_normal_map;
+};
+
+Ogre::MaterialPtr Terrn2CustomMaterial::Profile::generate(const Ogre::Terrain* terrain)
+{
+    const Ogre::String& matName = terrain->getMaterialName();
+
+    Ogre::MaterialPtr mat = Ogre::MaterialManager::getSingleton().getByName(matName);
+    if (!mat.isNull()) 
+        Ogre::MaterialManager::getSingleton().remove(matName);
+
+    Terrn2CustomMaterial* parent = static_cast<Terrn2CustomMaterial*>(this->getParent());
+
+    // Set Ogre material 
+    mat = Ogre::MaterialManager::getSingleton().getByName(parent->m_material_name);
+
+    // Clone material
+    if(parent->m_clone_material)
+    {
+        mat = mat->clone(matName);
+        parent->m_material_name = matName;
+    }
+
+    // Add normalmap
+    if(parent->m_add_normal_map)
+    {
+        // Get default pass
+        Ogre::Pass *p = mat->getTechnique(0)->getPass(0);
+
+        // Add terrain's global normalmap to renderpass so the fragment program can find it.
+        Ogre::TextureUnitState *tu = p->createTextureUnitState(matName+"/nm");
+
+        Ogre::TexturePtr nmtx = terrain->getTerrainNormalMap();
+        tu->_setTexturePtr(nmtx);
+    }
+
+    return mat;
+};
+
+// ----------------------------------------------------------------------------
 
 #define XZSTR(X,Z)   String("[") + TOSTRING(X) + String(",") + TOSTRING(Z) + String("]")
 
-TerrainGeometryManager::TerrainGeometryManager(TerrainManager *terrainManager) :
-	  terrainManager(terrainManager)
-	, disableCaching(false)
-	, mTerrainsImported(false)
+TerrainGeometryManager::TerrainGeometryManager(TerrainManager* terrainManager)
+    : mHeightData(nullptr)
+    , m_was_new_geometry_generated(false)
+    , terrainManager(terrainManager)
 {
 }
 
 TerrainGeometryManager::~TerrainGeometryManager()
 {
-	mTerrainGroup->removeAllTerrains();
+    m_ogre_terrain_group->removeAllTerrains();
 }
 
-void TerrainGeometryManager::loadOgreTerrainConfig(String filename)
+/// @author Ported from OGRE engine, www.ogre3d.org, file OgreTerrain.cpp
+void TerrainGeometryManager::getTerrainPositionAlign(Real x, Real y, Real z, Terrain::Alignment align, Vector3* outTSpos)
 {
-	String ext;
-	Ogre::StringUtil::splitBaseFilename(filename, baseName, ext);
-
-	loadTerrainConfig(filename);
-
-	disableCaching = m_terrain_config.GetBool("disableCaching", false);
-
-	initTerrain();
+    switch (align)
+    {
+    case Terrain::ALIGN_X_Z:
+        outTSpos->x = (x - mBase - mPos.x) / ((mSize - 1) * mScale);
+        outTSpos->y = (z + mBase - mPos.z) / ((mSize - 1) * -mScale);
+        outTSpos->z = y;
+        break;
+    case Terrain::ALIGN_Y_Z:
+        outTSpos->x = (z - mBase - mPos.z) / ((mSize - 1) * -mScale);
+        outTSpos->y = (y + mBase - mPos.y) / ((mSize - 1) * mScale);
+        outTSpos->z = x;
+        break;
+    case Terrain::ALIGN_X_Y:
+        outTSpos->x = (x - mBase - mPos.x) / ((mSize - 1) * mScale);
+        outTSpos->y = (y - mBase - mPos.y) / ((mSize - 1) * mScale);
+        outTSpos->z = z;
+        break;
+    };
 }
 
-bool TerrainGeometryManager::loadTerrainConfig(String filename)
+/// @author Ported from OGRE engine, www.ogre3d.org, file OgreTerrain.cpp
+float TerrainGeometryManager::getHeightAtPoint(long x, long y)
 {
-	try
-	{
-		DataStreamPtr ds_config = ResourceGroupManager::getSingleton().openResource(filename, Ogre::ResourceGroupManager::AUTODETECT_RESOURCE_GROUP_NAME);
-		m_terrain_config.load(ds_config, "\t:=", false);
-		return true;
-	} catch(...)
-	{
-		m_terrain_config.clear();
-	}
-	return false;
+    // clamp
+    x = std::min(x, (long)mSize - 1L);
+    x = std::max(x, 0L);
+    y = std::min(y, (long)mSize - 1L);
+    y = std::max(y, 0L);
+
+    return mHeightData[y * mSize + x];
 }
 
-Ogre::String TerrainGeometryManager::getPageConfigFilename(int x, int z)
+/// @author Ported from OGRE engine, www.ogre3d.org, file OgreTerrain.cpp
+float TerrainGeometryManager::getHeightAtTerrainPosition(Real x, Real y)
 {
-	String cfg = pageConfigFormat;
+    // get left / bottom points (rounded down)
+    Real factor = (Real)mSize - 1.0f;
+    Real invFactor = 1.0f / factor;
 
-	cfg = StringUtil::replaceAll(cfg, "{X}", TOSTRING(x));
-	cfg = StringUtil::replaceAll(cfg, "{Z}", TOSTRING(z));
+    long startX = static_cast<long>(x * factor);
+    long startY = static_cast<long>(y * factor);
+    long endX = startX + 1;
+    long endY = startY + 1;
 
-	return cfg;
+    // now get points in terrain space (effectively rounding them to boundaries)
+    // note that we do not clamp! We need a valid plane
+    Real startXTS = startX * invFactor;
+    Real startYTS = startY * invFactor;
+    Real endXTS = endX * invFactor;
+    Real endYTS = endY * invFactor;
+
+    // now clamp
+    endX = std::min(endX, (long)mSize - 1);
+    endY = std::min(endY, (long)mSize - 1);
+
+    // get parametric from start coord to next point
+    Real xParam = (x - startXTS) / invFactor;
+    Real yParam = (y - startYTS) / invFactor;
+
+    /* For even / odd tri strip rows, triangles are this shape:
+    even     odd
+    3---2   3---2
+    | / |   | \ |
+    0---1   0---1
+    */
+
+    // Build all 4 positions in terrain space, using point-sampled height
+    Vector3 v0(startXTS, startYTS, getHeightAtPoint(startX, startY));
+    Vector3 v1(endXTS, startYTS, getHeightAtPoint(endX, startY));
+    Vector3 v2(endXTS, endYTS, getHeightAtPoint(endX, endY));
+    Vector3 v3(startXTS, endYTS, getHeightAtPoint(startX, endY));
+    // define this plane in terrain space
+    Plane plane;
+    if (startY % 2)
+    {
+        // odd row
+        bool secondTri = ((1.0 - yParam) > xParam);
+        if (secondTri)
+            plane.redefine(v0, v1, v3);
+        else
+            plane.redefine(v1, v2, v3);
+    }
+    else
+    {
+        // even row
+        bool secondTri = (yParam > xParam);
+        if (secondTri)
+            plane.redefine(v0, v2, v3);
+        else
+            plane.redefine(v0, v1, v2);
+    }
+
+    // Solve plane equation for z
+    return (-plane.normal.x * x
+            - plane.normal.y * y
+            - plane.d) / plane.normal.z;
 }
 
-Ogre::DataStreamPtr TerrainGeometryManager::getPageConfig(int x, int z)
+/// @author Ported from OGRE engine, www.ogre3d.org, file OgreTerrain.cpp
+float TerrainGeometryManager::getHeightAtWorldPosition(float x, float z)
 {
-	String cfg = getPageConfigFilename(x, z);
+    Vector3 terrPos;
+    getTerrainPositionAlign(x, 0.0f, z, mAlign, &terrPos);
 
-	try
-	{
-		LOG("loading page config for page " + XZSTR(x,z) + " : " + cfg);
-		DataStreamPtr ds = ResourceGroupManager::getSingleton().openResource(cfg, Ogre::ResourceGroupManager::AUTODETECT_RESOURCE_GROUP_NAME);
+    if (terrPos.x <= 0.0f || terrPos.y <= 0.0f || terrPos.x >= 1.0f || terrPos.y >= 1.0f)
+        return 0.0f;
 
-		if (!ds.isNull() && ds->isReadable())
-		{
-			return ds;
-		}
-	} catch (...)
-	{
-
-	}
-
-	LOG("error loading page config for page " + XZSTR(x,z) + " : " + cfg);
-
-	if (x != 0 || z != 0)
-	{
-		LOG("loading default page config: " + cfg + " instead");
-		return getPageConfig(0, 0);
-	}
-
-	return DataStreamPtr();
+    return getHeightAtTerrainPosition(terrPos.x, terrPos.y);
 }
 
-Ogre::String TerrainGeometryManager::getPageHeightmap(int x, int z)
+float TerrainGeometryManager::getHeightAt(float x, float z)
 {
-	DataStreamPtr ds = getPageConfig(x, z);
-
-	if (ds.isNull())
-		return "";
-
-	char buf[4096];
-	ds->readLine(buf, 4096);
-	return String(buf);
+    if (m_spec->is_flat)
+        return 0.0f;
+    else
+    //return m_ogre_terrain_group->getHeightAtWorldPosition(x, 1000, z);
+        return getHeightAtWorldPosition(x, z);
 }
 
-void TerrainGeometryManager::initTerrain()
+Ogre::Vector3 TerrainGeometryManager::getNormalAt(float x, float y, float z, float precision)
 {
-	// X, Y and Z scale
-	mapsizex    = m_terrain_config.GetInt("WorldSizeX", 1024);
-	mapsizey    = m_terrain_config.GetInt("WorldSizeY", 50);
-	mapsizez    = m_terrain_config.GetInt("WorldSizeZ", 1024);
-	terrainSize = m_terrain_config.GetInt("PageSize", 1025);
+    Ogre::Vector3 left(-precision, getHeightAt(x - precision, z) - y, 0.0f);
+    Ogre::Vector3 down(0.0f, getHeightAt(x, z + precision) - y, precision);
+    down = left.crossProduct(down);
+    down.normalise();
+    return down;
+}
 
-	worldSize = std::max(mapsizex, mapsizez);
+void TerrainGeometryManager::InitTerrain(std::string otc_filename)
+{
+    try
+    {
+        OTCParser otc_parser;
+        DataStreamPtr ds_config = ResourceGroupManager::getSingleton().openResource(otc_filename);
+        otc_parser.LoadMasterConfig(ds_config, otc_filename.c_str());
 
-	String filenameSuffix = "mapbin";
-	pageMinX = 0;
-	pageMaxX = m_terrain_config.GetInt("PagesX", 0);
-	pageMinZ = 0;
-	pageMaxZ = m_terrain_config.GetInt("PagesZ", 0);
+        for (OTCPage& page : otc_parser.GetDefinition()->pages)
+        {
+            if (page.pageconf_filename.empty())
+                continue;
 
-	pageConfigFormat = m_terrain_config.GetString("PageFileFormat", baseName + "-page-{X}-{Z}.otc");
+            DataStreamPtr ds_page = ResourceGroupManager::getSingleton().openResource(page.pageconf_filename);
+            if (ds_page.isNull() || !ds_page->isReadable())
+            {
+                LOG("[RoR|Terrain] Cannot read file [" + page.pageconf_filename + "].");
+                continue;
+            }
 
-	bool is_flat = m_terrain_config.GetBool("Flat", false);
+            otc_parser.LoadPageConfig(ds_page, page, page.pageconf_filename.c_str());
+        }
 
-	terrainPos = Vector3(mapsizex / 2.0f, 0.0f, mapsizez / 2.0f);
+        m_spec = otc_parser.GetDefinition();
+    }
+    catch(...) // Error already reported
+    {
+        return;
+    }
 
-	mTerrainGroup = OGRE_NEW TerrainGroup(gEnv->sceneManager, Terrain::ALIGN_X_Z, terrainSize, worldSize);
-	mTerrainGroup->setFilenameConvention(baseName, filenameSuffix);
-	mTerrainGroup->setOrigin(terrainPos);
-	mTerrainGroup->setResourceGroup("cache");
+    const std::string cache_filename_format = m_spec->cache_filename_base + "_OGRE_" + TOSTRING(OGRE_VERSION) + "_";
 
-	configureTerrainDefaults();
+    m_ogre_terrain_group = OGRE_NEW TerrainGroup(gEnv->sceneManager, Terrain::ALIGN_X_Z, m_spec->page_size, m_spec->world_size);
+    m_ogre_terrain_group->setFilenameConvention(cache_filename_format, "mapbin");
+    m_ogre_terrain_group->setOrigin(m_spec->origin_pos);
+    m_ogre_terrain_group->setResourceGroup("cache");
 
-	for (long x = pageMinX; x <= pageMaxX; ++x)
-	{
-		for (long z = pageMinZ; z <= pageMaxZ; ++z)
-		{
-			LoadingWindow::getSingleton().setProgress(23, _L("preparing terrain page ") + XZSTR(x,z));
-			defineTerrain(x, z, is_flat);
-			LoadingWindow::getSingleton().setProgress(23, _L("loading terrain page ") + XZSTR(x,z));
+    configureTerrainDefaults();
 
-			/*
-			Terrain *terrain = mTerrainGroup->getTerrain(x, z);
-			if(!terrain) continue;
-			terrain->load();
-			*/
-		}
-	}
+    auto* loading_win = RoR::App::GetGuiManager()->GetLoadingWindow();
+    for (OTCPage& page : m_spec->pages)
+    {
+        loading_win->setProgress(23, _L("preparing terrain page ") + XZSTR(page.pos_x, page.pos_z));
+        this->SetupGeometry(page, m_spec->is_flat);
+    }
 
-	// sync load since we want everything in place when we start
-	LoadingWindow::getSingleton().setProgress(23, _L("loading terrain pages"));
-	mTerrainGroup->loadAllTerrains(true);
+    // sync load since we want everything in place when we start
+    loading_win->setProgress(23, _L("loading terrain pages"));
+    m_ogre_terrain_group->loadAllTerrains(true);
 
+    Terrain* terrain = m_ogre_terrain_group->getTerrain(0, 0);
+    mHeightData = terrain->getHeightData();
+    mAlign = terrain->getAlignment();
+    mSize = terrain->getSize();
+    const float world_size = terrain->getWorldSize();
+    mBase = -world_size * 0.5f;
+    mScale = world_size / (Real)(mSize - 1);
+    mPos = terrain->getPosition();
 
-	// update the blend maps
-	if (mTerrainsImported)
-	{
-		for (long x = pageMinX; x <= pageMaxX; ++x)
-		{
-			for (long z = pageMinZ; z <= pageMaxZ; ++z)
-			{
-				Terrain *terrain = mTerrainGroup->getTerrain(x, z);
-				if (!terrain) continue;
-				//ShadowManager::getSingleton().updatePSSM(terrain);
-				LoadingWindow::getSingleton().setProgress(23, _L("loading terrain page layers ") + XZSTR(x,z));
-				loadLayers(x, z, terrain);
-				LoadingWindow::getSingleton().setProgress(23, _L("loading terrain page blend maps ") + XZSTR(x,z));
-				initBlendMaps(x, z, terrain);
-			}
-		}
-		
-		// always save the results when it was imported
-		if (!disableCaching)
-		{
-			LoadingWindow::getSingleton().setProgress(23, _L("saving all terrain pages ..."));
-			mTerrainGroup->saveAllTerrains(false);
-		}
-	} else
-	{
-		LOG(" *** Terrain loaded from cache ***");
-	}
+    // update the blend maps
+    if (m_was_new_geometry_generated)
+    {
+        if (terrainManager->GetDef().custom_material_name.empty())
+        {
+            for (OTCPage& page : m_spec->pages)
+            {
+                Ogre::Terrain* terrain = m_ogre_terrain_group->getTerrain(page.pos_x, page.pos_z);
 
-	mTerrainGroup->freeTemporaryResources();
+                if (terrain != nullptr)
+                {
+                    loading_win->setProgress(23, _L("loading terrain page layers ") + XZSTR(page.pos_x, page.pos_z));
+                    this->SetupLayers(page, terrain);
+                    loading_win->setProgress(23, _L("loading terrain page blend maps ") + XZSTR(page.pos_x, page.pos_z));
+                    this->SetupBlendMaps(page, terrain);
+                }
+            }
+        }
+
+        // always save the results when it was imported
+        if (!m_spec->disable_cache)
+        {
+            loading_win->setProgress(23, _L("saving all terrain pages ..."));
+            m_ogre_terrain_group->saveAllTerrains(false);
+        }
+    }
+    else
+    {
+        LOG(" *** Terrain loaded from cache ***");
+    }
+
+    m_ogre_terrain_group->freeTemporaryResources();
 }
 
 void TerrainGeometryManager::updateLightMap()
 {
-	TerrainGroup::TerrainIterator ti = mTerrainGroup->getTerrainIterator();
+    TerrainGroup::TerrainIterator ti = m_ogre_terrain_group->getTerrainIterator();
 
-	while (ti.hasMoreElements())
-	{
-		Terrain *terrain = ti.getNext()->instance;
-		if (!terrain) continue;
-		//ShadowManager::getSingleton().updatePSSM(terrain);
-		if (!terrain->isDerivedDataUpdateInProgress())
-		{
-			terrain->dirtyLightmap();
-			terrain->updateDerivedData();
-		}
-	}
+    while (ti.hasMoreElements())
+    {
+        Terrain* terrain = ti.getNext()->instance;
+        if (!terrain)
+            continue;
+
+        if (!terrain->isDerivedDataUpdateInProgress())
+        {
+            terrain->dirtyLightmap();
+            terrain->updateDerivedData();
+        }
+    }
 }
 
-bool TerrainGeometryManager::update(float dt)
+void TerrainGeometryManager::UpdateMainLightPosition()
 {
-	Light *light = gEnv->terrainManager->getMainLight();
-	TerrainGlobalOptions *terrainOptions = TerrainGlobalOptions::getSingletonPtr();
-	if (light)
-	{
-		terrainOptions->setLightMapDirection(light->getDerivedDirection());
-		terrainOptions->setCompositeMapDiffuse(light->getDiffuseColour());
-	}
-	terrainOptions->setCompositeMapAmbient(gEnv->sceneManager->getAmbientLight());
+    Light* light = App::GetSimTerrain()->getMainLight();
+    TerrainGlobalOptions* terrainOptions = TerrainGlobalOptions::getSingletonPtr();
+    if (light)
+    {
+        terrainOptions->setLightMapDirection(light->getDerivedDirection());
+        terrainOptions->setCompositeMapDiffuse(light->getDiffuseColour());
+    }
+    terrainOptions->setCompositeMapAmbient(gEnv->sceneManager->getAmbientLight());
 
-	mTerrainGroup->update();
-	return true;
+    m_ogre_terrain_group->update();
 }
 
 void TerrainGeometryManager::configureTerrainDefaults()
 {
-	OGRE_NEW TerrainGlobalOptions();
+    OGRE_NEW TerrainGlobalOptions();
 
-	Light *light = gEnv->terrainManager->getMainLight();
-	TerrainGlobalOptions *terrainOptions = TerrainGlobalOptions::getSingletonPtr();
-	// Configure global
-	terrainOptions->setMaxPixelError(m_terrain_config.GetInt("MaxPixelError", 5));
+    TerrainGlobalOptions* terrainOptions = TerrainGlobalOptions::getSingletonPtr();
+    std::string const & custom_mat = terrainManager->GetDef().custom_material_name;
+    if (!custom_mat.empty())
+    {
+        terrainOptions->setDefaultMaterialGenerator(
+            Ogre::TerrainMaterialGeneratorPtr(new Terrn2CustomMaterial(custom_mat, false, true)));
+    }
+    else
+    {
+        terrainOptions->setDefaultMaterialGenerator(
+            Ogre::TerrainMaterialGeneratorPtr(new Ogre::TerrainPSSMMaterialGenerator()));
+    }
+    // Configure global
+    terrainOptions->setMaxPixelError(m_spec->max_pixel_error);
 
-	// Important to set these so that the terrain knows what to use for derived (non-realtime) data
-	if (light)
-	{
-		terrainOptions->setLightMapDirection(light->getDerivedDirection());
-		terrainOptions->setCompositeMapDiffuse(light->getDiffuseColour());
-	}
-	terrainOptions->setCompositeMapAmbient(gEnv->sceneManager->getAmbientLight());
+    // Important to set these so that the terrain knows what to use for derived (non-realtime) data
+    Light* light = App::GetSimTerrain()->getMainLight();
+    if (light)
+    {
+        terrainOptions->setLightMapDirection(light->getDerivedDirection());
+        if (custom_mat.empty())
+        {
+            terrainOptions->setCompositeMapDiffuse(light->getDiffuseColour());
+        }
+    }
+    terrainOptions->setCompositeMapAmbient(gEnv->sceneManager->getAmbientLight());
 
-	// Configure default import settings for if we use imported image
-	Ogre::Terrain::ImportData& defaultimp = mTerrainGroup->getDefaultImportSettings();
-	defaultimp.terrainSize  = terrainSize; // the heightmap size
-	defaultimp.worldSize    = worldSize; // this is the scaled up size, like 12km
-	defaultimp.inputScale   = mapsizey;
-	defaultimp.minBatchSize = m_terrain_config.GetInt("minBatchSize", 33);
-	defaultimp.maxBatchSize = m_terrain_config.GetInt("maxBatchSize", 65);
+    // Configure default import settings for if we use imported image
+    Ogre::Terrain::ImportData& defaultimp = m_ogre_terrain_group->getDefaultImportSettings();
+    defaultimp.terrainSize  = m_spec->page_size; // the heightmap size
+    defaultimp.worldSize    = m_spec->world_size; // this is the scaled up size, like 12km
+    defaultimp.inputScale   = m_spec->world_size_y;
+    defaultimp.minBatchSize = m_spec->batch_size_min;
+    defaultimp.maxBatchSize = m_spec->batch_size_max;
 
-	// optimizations
-	TerrainMaterialGeneratorA::SM2Profile* matProfile = static_cast<TerrainMaterialGeneratorA::SM2Profile*>(terrainOptions->getDefaultMaterialGenerator()->getActiveProfile());
-	if (matProfile)
-	{
-		matProfile->setLightmapEnabled(m_terrain_config.GetBool("LightmapEnabled", false));
-		// Fix for OpenGL, otherwise terrains are black
-		if (Root::getSingleton().getRenderSystem()->getName() == "OpenGL Rendering Subsystem") {
-			matProfile->setLayerNormalMappingEnabled(true);
-			matProfile->setLayerSpecularMappingEnabled(true);
-		} else {
-			matProfile->setLayerNormalMappingEnabled(m_terrain_config.GetBool("NormalMappingEnabled", false));
-			matProfile->setLayerSpecularMappingEnabled(m_terrain_config.GetBool("SpecularMappingEnabled", false));
-		}
-		matProfile->setLayerParallaxMappingEnabled(m_terrain_config.GetBool("ParallaxMappingEnabled", false));
-		matProfile->setGlobalColourMapEnabled(m_terrain_config.GetBool("GlobalColourMapEnabled", false));
-		matProfile->setReceiveDynamicShadowsDepth(m_terrain_config.GetBool("ReceiveDynamicShadowsDepth", false));
-	}
+    // optimizations
+    TerrainPSSMMaterialGenerator::SM2Profile* matProfile = nullptr;
+    if (custom_mat.empty())
+    {
+        matProfile = static_cast<TerrainPSSMMaterialGenerator::SM2Profile*>(terrainOptions->getDefaultMaterialGenerator()->getActiveProfile());
+        if (matProfile)
+        {
+            matProfile->setLightmapEnabled(m_spec->lightmap_enabled);
+            // Fix for OpenGL, otherwise terrains are black
+            if (Root::getSingleton().getRenderSystem()->getName() == "OpenGL Rendering Subsystem")
+            {
+                matProfile->setLayerNormalMappingEnabled(true);
+                matProfile->setLayerSpecularMappingEnabled(true);
+            }
+            else
+            {
+                matProfile->setLayerNormalMappingEnabled(m_spec->norm_map_enabled);
+                matProfile->setLayerSpecularMappingEnabled(m_spec->spec_map_enabled);
+            }
+            matProfile->setLayerParallaxMappingEnabled(m_spec->parallax_enabled);
+            matProfile->setGlobalColourMapEnabled(m_spec->global_colormap_enabled);
+            matProfile->setReceiveDynamicShadowsDepth(m_spec->recv_dyn_shadows_depth);
 
-	terrainOptions->setLayerBlendMapSize(m_terrain_config.GetInt("LayerBlendMapSize", 1024));
-	terrainOptions->setCompositeMapSize(m_terrain_config.GetInt("CompositeMapSize", 1024));
-	terrainOptions->setCompositeMapDistance(m_terrain_config.GetInt("CompositeMapDistance", 4000));
-	terrainOptions->setSkirtSize(m_terrain_config.GetInt("SkirtSize", 30));
-	terrainOptions->setLightMapSize(m_terrain_config.GetInt("LightMapSize", 1024));
-	terrainOptions->setCastsDynamicShadows(m_terrain_config.GetBool("CastsDynamicShadows", false));
+            terrainManager->getShadowManager()->updateTerrainMaterial(matProfile);
+        }
+    }
 
-	terrainOptions->setUseRayBoxDistanceCalculation(false);
+    terrainOptions->setLayerBlendMapSize   (m_spec->layer_blendmap_size);
+    terrainOptions->setCompositeMapSize    (m_spec->composite_map_size);
+    terrainOptions->setCompositeMapDistance(m_spec->composite_map_distance);
+    terrainOptions->setSkirtSize           (m_spec->skirt_size);
+    terrainOptions->setLightMapSize        (m_spec->lightmap_size);
 
-	//TODO: Make this only when hydrax is enabled.
-	terrainOptions->setUseVertexCompressionWhenAvailable(false);
+    if (custom_mat.empty())
+    {
+        if (matProfile->getReceiveDynamicShadowsPSSM())
+        {
+            terrainOptions->setCastsDynamicShadows(true);
+        }
+    }
 
-	// load layer basics now
-	loadLayers(0, 0, 0);
+    terrainOptions->setUseRayBoxDistanceCalculation(false);
+
+    //TODO: Make this only when hydrax is enabled.
+    terrainOptions->setUseVertexCompressionWhenAvailable(false);
+
+    // HACK: Load the single page config now
+    // This is how it "worked before" ~ only_a_ptr, 04/2017
+    this->SetupLayers(*m_spec->pages.begin(), nullptr);
 }
 
 // if terrain is set, we operate on the already loaded terrain
-void TerrainGeometryManager::loadLayers(int x, int z, Terrain *terrain)
+void TerrainGeometryManager::SetupLayers(RoR::OTCPage& page, Ogre::Terrain *terrain)
 {
-	if (pageConfigFormat.empty()) return;
-	
-	DataStreamPtr ds = getPageConfig(x, z);
+    if (page.num_layers == 0)
+        return;
 
-	if (ds.isNull())
-		return;
+    Ogre::Terrain::ImportData& defaultimp = m_ogre_terrain_group->getDefaultImportSettings();
 
-	char line[4096];
-	ds->readLine(line, 4096);
-	String heightmapImage = String(line);
-	ds->readLine(line, 4096);
-	terrainLayers = PARSEINT(String(line));
+    if (!terrain)
+        defaultimp.layerList.resize(page.num_layers);
 
-	if (terrainLayers == 0)
-		return;
+    int layer_idx = 0;
 
-	Ogre::Terrain::ImportData &defaultimp = mTerrainGroup->getDefaultImportSettings();
+    for (OTCLayer& layer : page.layers)
+    {
+        if (!terrain)
+        {
+            defaultimp.layerList[layer_idx].worldSize = layer.world_size;
+            defaultimp.layerList[layer_idx].textureNames.push_back(layer.diffusespecular_filename);
+            defaultimp.layerList[layer_idx].textureNames.push_back(layer.normalheight_filename);
+        }
+        else
+        {
+            terrain->setLayerWorldSize(layer_idx, layer.world_size);
+            terrain->setLayerTextureName(layer_idx, 0, layer.diffusespecular_filename);
+            terrain->setLayerTextureName(layer_idx, 1, layer.normalheight_filename);
+        }
 
-	if (!terrain)
-		defaultimp.layerList.resize(terrainLayers);
-
-	blendInfo.clear();
-	blendInfo.resize(terrainLayers);
-
-	int layer = 0;
-
-	while (!ds->eof())
-	{
-		size_t ll = ds->readLine(line, 4096);
-		if (ll==0 || line[0]=='/' || line[0]==';') continue;
-
-		StringVector args = StringUtil::split(String(line), ",");
-		if (args.size() < 3)
-		{
-			LOG("invalid page config line: '" + String(line) + "'");
-			continue;
-		}
-
-		StringUtil::trim(args[1]);
-		StringUtil::trim(args[2]);
-
-		float worldSize = PARSEREAL(args[0]);
-		if (!terrain)
-		{
-			defaultimp.layerList[layer].worldSize = worldSize;
-			defaultimp.layerList[layer].textureNames.push_back(args[1]);
-			defaultimp.layerList[layer].textureNames.push_back(args[2]);
-		} else
-		{
-			terrain->setLayerWorldSize(layer, worldSize);
-			terrain->setLayerTextureName(layer, 0, args[1]);
-			terrain->setLayerTextureName(layer, 1, args[2]);
-		}
-			
-		blendLayerInfo_t &bi = blendInfo[layer];
-		bi.blendMode = 'R';
-		bi.alpha = 'R';
-
-		if (args.size() > 3)
-		{
-			StringUtil::trim(args[3]);
-			bi.blendMapTextureFilename = args[3];
-		}
-		if (args.size() > 4)
-		{
-			StringUtil::trim(args[4]);
-			bi.blendMode = args[4][0];
-		}
-		if (args.size() > 5)
-			bi.alpha = PARSEREAL(args[5]);
-
-		layer++;
-		if (layer >= terrainLayers)
-			break;
-	}
-	LOG("done loading page: loaded " + TOSTRING(layer) + " layers");
+        layer_idx++;
+    }
+    LOG("done loading page: loaded " + TOSTRING(layer_idx) + " layers");
 }
 
-void TerrainGeometryManager::initBlendMaps(int x, int z, Ogre::Terrain* terrain )
+void TerrainGeometryManager::SetupBlendMaps(OTCPage& page, Ogre::Terrain* terrain )
 {
-	bool debugBlendMaps = m_terrain_config.GetBool("DebugBlendMaps", false);
+    const int layerCount = terrain->getLayerCount();
+    auto layer_def_itor = page.layers.begin();
+    ++layer_def_itor;
+    for (int i = 1; i < layerCount; i++)
+    {
+        if (layer_def_itor->blendmap_filename.empty())
+            continue;
 
-	int layerCount = terrain->getLayerCount();
-	for (int i = 1; i < layerCount; i++)
-	{
-		blendLayerInfo_t &bi = blendInfo[i];
+        Ogre::Image img;
+        try
+        {
+            img.load(layer_def_itor->blendmap_filename, ResourceGroupManager::AUTODETECT_RESOURCE_GROUP_NAME);
+        }
+        catch (Exception& e)
+        {
+            LOG("Error loading blendmap: " + layer_def_itor->blendmap_filename + " : " + e.getFullDescription());
+            continue;
+        }
 
-		if(bi.blendMapTextureFilename.empty()) continue;
+        TerrainLayerBlendMap* blendmap = terrain->getLayerBlendMap(i);
 
-		Ogre::Image img;
-		//std::pair<uint8,uint8> textureIndex = terrain->getLayerBlendTextureIndex(i);
-		//uint8 bti = terrain->getBlendTextureIndex(i);
-		try
-		{
-			img.load(bi.blendMapTextureFilename, ResourceGroupManager::AUTODETECT_RESOURCE_GROUP_NAME);
-		} catch(Exception &e)
-		{
-			LOG("Error loading blendmap: " + bi.blendMapTextureFilename + " : " + e.getFullDescription());
-			continue;
-		}
+        // resize that blending map so it will fit
+        const Ogre::uint32 blendmapSize = terrain->getLayerBlendMapSize();
+        if (img.getWidth() != blendmapSize)
+            img.resize(blendmapSize, blendmapSize);
 
-		TerrainLayerBlendMap *blendmap = terrain->getLayerBlendMap(i);
+        // now to the ugly part
+        float* ptr = blendmap->getBlendPointer();
+        for (Ogre::uint32 z = 0; z != blendmapSize; z++)
+        {
+            for (Ogre::uint32 x = 0; x != blendmapSize; x++)
+            {
+                Ogre::ColourValue c = img.getColourAt(x, z, 0);
+                const float alpha = layer_def_itor->alpha;
+                if (layer_def_itor->blend_mode == 'R')
+                    *ptr++ = c.r * alpha;
+                else if (layer_def_itor->blend_mode == 'G')
+                    *ptr++ = c.g * alpha;
+                else if (layer_def_itor->blend_mode == 'B')
+                    *ptr++ = c.b * alpha;
+                else if (layer_def_itor->blend_mode == 'A')
+                    *ptr++ = c.a * alpha;
+            }
+        }
+        blendmap->dirty();
+        blendmap->update();
+        ++layer_def_itor;
+    }
 
-		// resize that blending map so it will fit
-		Ogre::uint32 blendmapSize = terrain->getLayerBlendMapSize();
-		if (img.getWidth() != blendmapSize)
-			img.resize(blendmapSize, blendmapSize);
-
-		// now to the ugly part
-		float* ptr = blendmap->getBlendPointer();
-		for (Ogre::uint32 z = 0; z != blendmapSize; z++)
-		{
-			for (Ogre::uint32 x = 0; x != blendmapSize; x++)
-			{
-				Ogre::ColourValue c = img.getColourAt(x, z, 0);
-				float alpha = bi.alpha;
-				if      (bi.blendMode == 'R')
-					*ptr++ = c.r * alpha;
-				else if (bi.blendMode == 'G')
-					*ptr++ = c.g * alpha;
-				else if (bi.blendMode == 'B')
-					*ptr++ = c.b * alpha;
-				else if (bi.blendMode == 'A')
-					*ptr++ = c.a * alpha;
-			}
-		}
-		blendmap->dirty();
-		blendmap->update();
-	}
-
-	if (debugBlendMaps)
-	{
-		for (int i = 1; i < layerCount; i++)
-		{
-			Ogre::TerrainLayerBlendMap* blendMap = terrain->getLayerBlendMap(i);
-			Ogre::uint32 blendmapSize = terrain->getLayerBlendMapSize();
-			Ogre::Image img;
-			unsigned short *idata = OGRE_ALLOC_T(unsigned short, blendmapSize * blendmapSize, Ogre::MEMCATEGORY_RESOURCE);
-			float scale = 65535.0f;
-			for (unsigned int x = 0; x < blendmapSize; x++)
-				for (unsigned int z = 0; z < blendmapSize; z++)
-					idata[x + z * blendmapSize] = (unsigned short)(blendMap->getBlendValue(x, blendmapSize - z) * scale);
-			img.loadDynamicImage((Ogre::uchar*)(idata), blendmapSize, blendmapSize, Ogre::PF_L16);
-			std::string fileName = "blendmap_layer_" + Ogre::StringConverter::toString(i) + ".png";
-			img.save(fileName);
-			OGRE_FREE(idata, Ogre::MEMCATEGORY_RESOURCE);
-		}
-	}
+    if (m_spec->blendmap_dbg_enabled)
+    {
+        for (int i = 1; i < layerCount; i++)
+        {
+            Ogre::TerrainLayerBlendMap* blendMap = terrain->getLayerBlendMap(i);
+            Ogre::uint32 blendmapSize = terrain->getLayerBlendMapSize();
+            Ogre::Image img;
+            unsigned short* idata = OGRE_ALLOC_T(unsigned short, blendmapSize * blendmapSize, Ogre::MEMCATEGORY_RESOURCE);
+            float scale = 65535.0f;
+            for (unsigned int x = 0; x < blendmapSize; x++)
+                for (unsigned int z = 0; z < blendmapSize; z++)
+                    idata[x + z * blendmapSize] = (unsigned short)(blendMap->getBlendValue(x, blendmapSize - z) * scale);
+            img.loadDynamicImage((Ogre::uchar*)(idata), blendmapSize, blendmapSize, Ogre::PF_L16);
+            std::string fileName = "blendmap_layer_" + Ogre::StringConverter::toString(i) + ".png";
+            img.save(fileName);
+            OGRE_FREE(idata, Ogre::MEMCATEGORY_RESOURCE);
+        }
+    }
 }
 
-bool TerrainGeometryManager::getTerrainImage(int x, int z, Image& img)
+// Internal helper
+bool LoadHeightmap(OTCPage& page, Image& img)
 {
-	String heightmapString = "Heightmap."+TOSTRING(x)+"."+TOSTRING(z);
-	String heightmapFilename = getPageHeightmap(x, z);
-	StringUtil::trim(heightmapFilename);
+    if (page.heightmap_filename.empty())
+    {
+        LOG("[RoR|Terrain] Empty Heightmap provided in OTC, please use 'Flat=1' instead");
+        return false;
+    }
 
-	if (heightmapFilename.empty())
-	{
-		LOG("empty Heightmap provided, please use 'Flat=1' instead");
-		return false;
-	}
+    if (page.heightmap_filename.find(".raw") != String::npos)
+    {
+        // load raw data
+        DataStreamPtr stream = ResourceGroupManager::getSingleton().openResource(page.heightmap_filename);
+        LOG("[RoR|Terrain] loading RAW image: " + TOSTRING(stream->size()) + " / " + TOSTRING(page.raw_size*page.raw_size*page.raw_bpp));
+        PixelFormat pix_format = (page.raw_bpp == 2) ? PF_L16 : PF_L8;
+        img.loadRawData(stream, page.raw_size, page.raw_size, 1, pix_format);
+    }
+    else
+    {
+        img.load(page.heightmap_filename, ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    }
 
-	if (heightmapFilename.find(".raw") != String::npos)
-	{
-		int rawSize = m_terrain_config.GetInt(heightmapString + ".raw.size", 1025);
-		int bpp     = m_terrain_config.GetInt(heightmapString + ".raw.bpp", 2);
+    if (page.raw_flip_x)
+        img.flipAroundX();
+    if (page.raw_flip_y)
+        img.flipAroundY();
 
-		// load raw data
-		DataStreamPtr stream = ResourceGroupManager::getSingleton().openResource(heightmapFilename);
-		LOG(" loading RAW image: " + TOSTRING(stream->size()) + " / " + TOSTRING(rawSize*rawSize*bpp));
-		PixelFormat pformat = PF_L8;
-		if (bpp == 2)
-			pformat = PF_L16;
-		img.loadRawData(stream, rawSize, rawSize, 1, pformat);
-	} else
-	{
-		img.load(heightmapFilename, ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-	}
-
-	if (m_terrain_config.GetBool(heightmapString + ".flipX", false))
-		img.flipAroundX();
-	if (m_terrain_config.GetBool(heightmapString + ".flipY", false))
-		img.flipAroundY();
-
-	return true;
+    return true;
 }
 
-void TerrainGeometryManager::defineTerrain(int x, int z, bool flat)
+void TerrainGeometryManager::SetupGeometry(RoR::OTCPage& page, bool flat)
 {
-	if (flat)
-	{
-		// very simple, no height data to load at all
-		mTerrainGroup->defineTerrain(x, z, 0.0f);
-		return;
-	}
-	
-	String filename = mTerrainGroup->generateFilename(x, z);
+    if (flat)
+    {
+        // very simple, no height data to load at all
+        m_ogre_terrain_group->defineTerrain(page.pos_x, page.pos_z, 0.0f);
+        return;
+    }
 
-	if (!disableCaching && ResourceGroupManager::getSingleton().resourceExists(mTerrainGroup->getResourceGroup(), filename))
-	{
-		// load from cache
-		mTerrainGroup->defineTerrain(x, z);
-	} else
-	{
-		Image img;
-		if (getTerrainImage(x, z, img))
-		{
-			mTerrainGroup->defineTerrain(x, z, &img);
-			mTerrainsImported = true;
-		} else
-		{
-			// fall back to no heightmap
-			mTerrainGroup->defineTerrain(x, z, 0.0f);
-		}
-	}
+    const std::string page_cache_filename = m_ogre_terrain_group->generateFilename(page.pos_x, page.pos_z);
+    const std::string res_group = m_ogre_terrain_group->getResourceGroup();
+    if (!m_spec->disable_cache && ResourceGroupManager::getSingleton().resourceExists(res_group, page_cache_filename))
+    {
+        // load from cache
+        m_ogre_terrain_group->defineTerrain(page.pos_x, page.pos_z);
+    }
+    else
+    {
+        Image img;
+        if (LoadHeightmap(page, img))
+        {
+            m_ogre_terrain_group->defineTerrain(page.pos_x, page.pos_z, &img);
+            m_was_new_geometry_generated = true;
+        }
+        else
+        {
+            // fall back to no heightmap
+            m_ogre_terrain_group->defineTerrain(page.pos_x, page.pos_z, 0.0f);
+        }
+    }
 }
 
 Ogre::Vector3 TerrainGeometryManager::getMaxTerrainSize()
 {
-	return Vector3(mapsizex, mapsizey, mapsizez);
+    return Vector3(m_spec->world_size_x, m_spec->world_size_y, m_spec->world_size_z);
 }
 
-Ogre::Vector3 TerrainGeometryManager::getTerrainPosition()
-{
-	return terrainPos;
-}
-
-size_t TerrainGeometryManager::getMemoryUsage()
-{
-	// TODO
-	return 0;
-}
-
-void TerrainGeometryManager::freeResources()
-{
-	// TODO
-}
-
-Ogre::String TerrainGeometryManager::getCompositeMaterialName()
-{
-	TerrainGroup::TerrainIterator ti = mTerrainGroup->getTerrainIterator();
-
-	while (ti.hasMoreElements())
-	{
-		Terrain *terrain = ti.getNext()->instance;
-		if (!terrain) continue;
-		MaterialPtr mat = terrain->getCompositeMapMaterial();
-		if (!mat.isNull())
-			return mat->getName();
-	}
-
-	return String();
-}

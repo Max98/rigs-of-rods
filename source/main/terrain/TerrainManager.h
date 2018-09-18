@@ -1,142 +1,112 @@
 /*
-This source file is part of Rigs of Rods
-Copyright 2005-2012 Pierre-Michel Ricordel
-Copyright 2007-2012 Thomas Fischer
+    This source file is part of Rigs of Rods
+    Copyright 2005-2012 Pierre-Michel Ricordel
+    Copyright 2007-2012 Thomas Fischer
+    Copyright 2013-2017 Petr Ohlidal & contributors
 
-For more information, see http://www.rigsofrods.com/
+    For more information, see http://www.rigsofrods.org/
 
-Rigs of Rods is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License version 3, as
-published by the Free Software Foundation.
+    Rigs of Rods is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License version 3, as
+    published by the Free Software Foundation.
 
-Rigs of Rods is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
+    Rigs of Rods is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+    GNU General Public License for more details.
 
-You should have received a copy of the GNU General Public License
-along with Rigs of Rods.  If not, see <http://www.gnu.org/licenses/>.
+    You should have received a copy of the GNU General Public License
+    along with Rigs of Rods. If not, see <http://www.gnu.org/licenses/>.
 */
 
 #pragma once
 
-#include "ConfigFile.h"
-#include "IManager.h"
-#include "RoRFrameListener.h"
+#include "RoRPrerequisites.h"
+#include "Terrn2Fileformat.h"
 
-class TerrainManager : public IManager
+#include "SkyXManager.h"
+#include "HydraxWater.h"
+
+#include <OgreVector3.h>
+#include <string>
+
+class TerrainManager : public ZeroedMemoryAllocator
 {
 public:
 
-	TerrainManager();
-	~TerrainManager();
+    TerrainManager();
+    ~TerrainManager();
 
-	void loadTerrain(Ogre::String filename);
-	void loadTerrainConfigBasics(Ogre::DataStreamPtr &ds);
+    void               loadTerrain(Ogre::String filename);
+    bool               update(float dt);
+    void               setGravity(float value);
+    std::vector<authorinfo_t>& GetAuthors();
+    TerrainGeometryManager* getGeometryManager()     { return m_geometry_manager; };
+    TerrainObjectManager* getObjectManager()         { return m_object_manager; };
+    float              getGravity() const            { return m_cur_gravity; };
+    std::string        getTerrainName() const        { return m_def.name; };
+    std::string        getGUID() const               { return m_def.guid; };
+    int                getCategoryID() const         { return m_def.category_id; };
+    int                getVersion() const            { return m_def.version; };
+    int                getFarClip() const            { return m_sight_range; }
+    int                getPagedMode() const          { return m_paged_mode; };
+    float              getPagedDetailFactor() const  { return m_paged_detail_factor; };
+    Ogre::Vector3      getMaxTerrainSize();
+    Collisions*        getCollisions()               { return m_collisions; };
+    IWater*            getWater()                    { return m_water; };
+    Ogre::Light*       getMainLight()                { return m_main_light; };
+    Ogre::Vector3      getSpawnPos()                 { return m_def.start_position; };
+    RoR::Terrn2Def&    GetDef()                      { return m_def; }
+    HydraxWater*       getHydraxManager()            { return m_hydrax_water; }
+    SkyManager*        getSkyManager();
+    SkyXManager*       getSkyXManager()              { return SkyX_manager; };
+    ShadowManager*     getShadowManager()            { return m_shadow_manager; };
+    std::string        GetMinimapTextureName();
+    void               LoadPredefinedActors();
+    bool               HasPredefinedActors();
+    float              GetHeightAt(float x, float z);
+    Ogre::Vector3      GetNormalAt(float x, float y, float z);
 
-	bool update(float dt);
+    static const int UNLIMITED_SIGHTRANGE = 4999;
 
-	void setGravity(float value);
-	float getGravity() { return gravity; };
+private:
 
-	Ogre::String getTerrainName() { return terrain_name; };
-	Ogre::String getGUID() { return guid; };
-	int getCategoryID() { return category_id; };
-	int getVersion() { return version; };
-	int getFarClip() { return far_clip; }
-	int getPagedMode() { return paged_mode; };
-	float getPagedDetailFactor() { return paged_detail_factor; };
-	std::vector<authorinfo_t> & GetAuthors();
+    SkyXManager *SkyX_manager;
+    // internal methods
+    void initCamera();
+    void initTerrainCollisions();
+    void initDashboards();
+    void initFog();
+    void initGlow();
+    void initHDR();
+    void initLight();
+    void initMotionBlur();
+    void initObjects();
+    void initScripting();
+    void initShadows();
+    void initSkySubSystem();
+    void initSubSystems();
+    void initSunburn();
+    void initVegetation();
+    void initWater();
 
-	Ogre::Vector3 getMaxTerrainSize();
+    void fixCompositorClearColor();
+    void loadTerrainObjects();
 
-	// some getters
-	Collisions *getCollisions() { return collisions; };
-	Envmap *getEnvmap() { return envmap; };
-	IHeightFinder *getHeightFinder();
-	IWater *getWater() { return water; };
-	Ogre::Light *getMainLight() { return main_light; };
-	Ogre::Vector3 getSpawnPos() { return start_position; };
-
-	SkyManager *getSkyManager() 
-	{ 
-		if (gEnv->frameListener->loading_state == TERRAIN_LOADED || gEnv->frameListener->loading_state == ALL_LOADED)
-			return sky_manager;
-		else
-			return nullptr;
-	};
-
-	TerrainGeometryManager *getGeometryManager() { return geometry_manager; };
-	TerrainObjectManager *getObjectManager() { return object_manager; };
-
-	// preloaded trucks
-	void loadPreloadedTrucks();
-	bool hasPreloadedTrucks();
-
-	size_t getMemoryUsage();
-	void freeResources();
-
-	static const int UNLIMITED_SIGHTRANGE = 4999;
-
-protected:
-
-	RoR::ConfigFile m_terrain_config;
-
-	// subsystems
-	Character *character;
-	Collisions *collisions;
-	Dashboard *dashboard;
-	Envmap *envmap;
-	HDRListener *hdr_listener;
-	SurveyMapManager *survey_map;
-	ShadowManager *shadow_manager;
-	SkyManager *sky_manager;
-	TerrainGeometryManager *geometry_manager;
-	TerrainObjectManager *object_manager;
-	IWater *water;
-	HydraxWater *hw;
-
-	// properties
-	Ogre::ColourValue ambient_color;
-	Ogre::ColourValue fade_color;
-	Ogre::Light *main_light;
-	Ogre::String file_hash;
-	Ogre::String guid;
-	Ogre::String ogre_terrain_config_filename;
-	Ogre::String terrain_name;
-	Ogre::Vector3 start_position;
-	std::vector<authorinfo_t> authors;
-	bool use_caelum;
-	float gravity;
-	float paged_detail_factor;
-	float water_line;
-	int category_id;
-	int far_clip;
-	int paged_mode;
-	int version;
-
-	// internal methods
-	void initCamera();
-	void initCollisions();
-	void initTerrainCollisions();
-	void initDashboards();
-	void initEnvironmentMap();
-	void initFog();
-	void initGeometry();
-	void initGlow();
-	void initHDR();
-	void initLight();
-	void initMotionBlur();
-	void initObjects();
-	void initScripting();
-	void initShadows();
-	void initSkySubSystem();
-	void initSubSystems();
-	void initSunburn();
-	void initSurveyMap();
-	void initVegetation();
-	void initWater();
-
-	void fixCompositorClearColor();
-	void loadTerrainObjects();
+    TerrainObjectManager*   m_object_manager;
+    TerrainGeometryManager* m_geometry_manager;
+    SurveyMapManager*       m_survey_map;
+    Collisions*    m_collisions;
+    Dashboard*     m_dashboard;
+    HDRListener*   m_hdr_listener;
+    ShadowManager* m_shadow_manager;
+    SkyManager*    m_sky_manager;
+    IWater*        m_water;
+    HydraxWater*   m_hydrax_water;
+    Ogre::Light*   m_main_light;
+    RoR::Terrn2Def m_def;
+    float          m_cur_gravity;
+    float          m_paged_detail_factor;
+    int            m_sight_range;
+    int            m_paged_mode;
 };

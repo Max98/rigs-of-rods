@@ -1,39 +1,42 @@
 /*
-	This source file is part of Rigs of Rods
-	Copyright 2005-2012 Pierre-Michel Ricordel
-	Copyright 2007-2012 Thomas Fischer
-	Copyright 2013-2015 Petr Ohlidal
+    This source file is part of Rigs of Rods
+    Copyright 2005-2012 Pierre-Michel Ricordel
+    Copyright 2007-2012 Thomas Fischer
+    Copyright 2013-2017 Petr Ohlidal & contributors
 
-	For more information, see http://www.rigsofrods.com/
+    For more information, see http://www.rigsofrods.org/
 
-	Rigs of Rods is free software: you can redistribute it and/or modify
-	it under the terms of the GNU General Public License version 3, as
-	published by the Free Software Foundation.
+    Rigs of Rods is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License version 3, as
+    published by the Free Software Foundation.
 
-	Rigs of Rods is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY; without even the implied warranty of
-	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-	GNU General Public License for more details.
+    Rigs of Rods is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+    GNU General Public License for more details.
 
-	You should have received a copy of the GNU General Public License
-	along with Rigs of Rods. If not, see <http://www.gnu.org/licenses/>.
+    You should have received a copy of the GNU General Public License
+    along with Rigs of Rods. If not, see <http://www.gnu.org/licenses/>.
 */
 
-/**
-	@file   
-	@author Petr Ohlidal
-	@date   05/2015
-*/
+
+/// @file
+/// @author Petr Ohlidal
+/// @date   05/2015
+
 
 #pragma once
 
 #include "BitFlags.h"
 #include "ForwardDeclarations.h"
 #include "Locator_t.h"
+#include "RigDef_Prerequisites.h"
 
 #include <OgreVector3.h>
 #include <OgreColourValue.h>
 #include <vector>
+
+class FlexMeshWheel; // Forward decl.
 
 namespace RoR
 {
@@ -75,9 +78,9 @@ struct FlexBodyCacheData
     FlexBodyRecordHeader header;
 
     Ogre::Vector3*    dst_pos;
-	Ogre::Vector3*    src_normals;
-	Ogre::ARGB*       src_colors;
-	Locator_t*        locators; //!< 1 loc per vertex
+    Ogre::Vector3*    src_normals;
+    Ogre::ARGB*       src_colors;
+    Locator_t*        locators; //!< 1 loc per vertex
 };
 
 /// Enables saving and loading flexbodies from/to binary file.
@@ -110,7 +113,7 @@ public:
     static const char*        SIGNATURE;
     static const unsigned int FILE_FORMAT_VERSION = 1;
 
-    FlexBodyFileIO() {}
+    FlexBodyFileIO();
 
     std::vector<FlexBody*> &  GetList();
     inline void               AddItemToSave(FlexBody* fb)     { m_items_to_save.push_back(fb); }
@@ -133,22 +136,22 @@ private:
                 
     void        WriteSignature();
     void         ReadAndCheckSignature();
-                
+
     void        WriteMetadata();
     void         ReadMetadata(FlexBodyFileMetadata* meta);
-                
+
     void        WriteFlexbodyHeader(FlexBody*          flexbody);
     void         ReadFlexbodyHeader(FlexBodyCacheData* flexbody);
-                
+
     void        WriteFlexbodyLocatorList(FlexBody*          flexbody);
     void         ReadFlexbodyLocatorList(FlexBodyCacheData* flexbody);
-                
+
     void        WriteFlexbodyNormalsBuffer(FlexBody*          flexbody);
     void         ReadFlexbodyNormalsBuffer(FlexBodyCacheData* flexbody);
 
     void        WriteFlexbodyPositionsBuffer(FlexBody*          flexbody);
     void         ReadFlexbodyPositionsBuffer(FlexBodyCacheData* flexbody);
-                
+
     void        WriteFlexbodyColorsBuffer(FlexBody*          flexbody);
     void         ReadFlexbodyColorsBuffer(FlexBodyCacheData* flexbody);
 
@@ -165,41 +168,43 @@ public:
     FlexFactory() {}
 
     FlexFactory(
-        MaterialFunctionMapper*   mfm,
-        MaterialReplacer*         mat_replacer,
-        Skin*                     skin,
-        node_t*                   all_nodes,
+        ActorSpawner*               spawner,
         bool                      is_flexbody_cache_enabled,
         int                       cache_entry_number = -1
         );
 
     FlexBody* CreateFlexBody(
-        const int num_nodes_in_rig, 
-        const char* mesh_name, 
-        const char* mesh_unique_name, 
+        RigDef::Flexbody* def,
         const int ref_node, 
         const int x_node, 
         const int y_node, 
-        Ogre::Vector3 const & offset,
         Ogre::Quaternion const & rot, 
-        std::vector<unsigned int> & node_indices
-        );
+        std::vector<unsigned int> & node_indices);
 
-    void           CheckAndLoadFlexbodyCache();
-    void           SaveFlexbodiesToCache();
+    FlexMeshWheel* CreateFlexMeshWheel(
+        unsigned int wheel_index,
+        int axis_node_1_index,
+        int axis_node_2_index,
+        int nstart,
+        int nrays,
+        float rim_radius,
+        bool rim_reverse,
+        std::string const & rim_mesh_name,
+        std::string const & tire_material_name);
+
+    void  CheckAndLoadFlexbodyCache();
+    void  SaveFlexbodiesToCache();
 
 private:
-    MaterialFunctionMapper* m_material_function_mapper;
-    MaterialReplacer*       m_material_replacer;
-    Skin*                   m_used_skin;
-    bool                    m_enable_flexbody_LODs;
+
+    void  ResolveFlexbodyLOD(std::string meshname, Ogre::MeshPtr newmesh);
+
+    ActorSpawner*             m_rig_spawner;
 
     FlexBodyFileIO          m_flexbody_cache;
     bool                    m_is_flexbody_cache_enabled;
     bool                    m_is_flexbody_cache_loaded;
     unsigned int            m_flexbody_cache_next_index;
-
-    node_t*                 m_rig_nodes_ptr;
 };
 
 } // namespace RoR

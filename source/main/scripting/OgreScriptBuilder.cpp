@@ -1,66 +1,91 @@
 /*
-This source file is part of Rigs of Rods
-Copyright 2005-2012 Pierre-Michel Ricordel
-Copyright 2007-2012 Thomas Fischer
+    This source file is part of Rigs of Rods
+    Copyright 2005-2012 Pierre-Michel Ricordel
+    Copyright 2007-2012 Thomas Fischer
+    Copyright 2013-2017 Petr Ohlidal & contributors
 
-For more information, see http://www.rigsofrods.com/
+    For more information, see http://www.rigsofrods.org/
 
-Rigs of Rods is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License version 3, as
-published by the Free Software Foundation.
+    Rigs of Rods is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License version 3, as
+    published by the Free Software Foundation.
 
-Rigs of Rods is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
+    Rigs of Rods is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+    GNU General Public License for more details.
 
-You should have received a copy of the GNU General Public License
-along with Rigs of Rods.  If not, see <http://www.gnu.org/licenses/>.
+    You should have received a copy of the GNU General Public License
+    along with Rigs of Rods. If not, see <http://www.gnu.org/licenses/>.
 */
-// created on 15th of May 2011 by Thomas Fischer
+
+/// @file
+/// @author Thomas Fischer
+/// @date   15th of May 2011
 
 #include "OgreScriptBuilder.h"
+
+#include "Application.h"
+#include "SHA1.h"
 
 #include <string>
 #include <Ogre.h>
 
-#include "SHA1.h"
-
-using namespace std;
-using namespace Ogre;
-
 // OgreScriptBuilder
-int OgreScriptBuilder::LoadScriptSection(const char *filename)
+int OgreScriptBuilder::LoadScriptSection(const char* full_path_cstr)
 {
-	// Open the script file
-	string scriptFile = filename;
+    // Get filename - required to retrieve file from OGRe's resource system.
+    //  This function received filename in older AngelScript versions, but now receives full path
+    //      (reconstructed wrong by CScriptBuilder because it doesn't know about OGRE's ZIP files).
+    //  TODO: Refactor the entire script building logic 
+    //      - create fully RoR-custom builder instead of hacked stock CScriptBuilder + our overload. ~ only_a_ptr, 08/2017
 
-	DataStreamPtr ds;
-	try
-	{
-		ds = ResourceGroupManager::getSingleton().openResource(scriptFile, ResourceGroupManager::AUTODETECT_RESOURCE_GROUP_NAME);
+    std::string full_path(full_path_cstr);
+    std::string filename;
+    size_t slash_pos = full_path.rfind('/'); // AngelScript always uses forward slashes in paths.
+    if (slash_pos != std::string::npos)
+    {
+        filename = full_path.substr(slash_pos+1);
+    }
+    else
+    {
+        filename = full_path;
+    }
 
-	} catch(Ogre::Exception e)
-	{
-		LOG("exception upon loading script file: " + e.getFullDescription());
-		return -1;
-	}
+    Ogre::DataStreamPtr ds;
+    try
+    {
+        ds = Ogre::ResourceGroupManager::getSingleton().openResource(filename, Ogre::ResourceGroupManager::AUTODETECT_RESOURCE_GROUP_NAME);
+                 //TODO: do not use `AUTODETECT_RESOURCE_GROUP_NAME`, use specific group, lookups are slow!
+                 //see also https://github.com/OGRECave/ogre/blob/master/Docs/1.10-Notes.md#resourcemanager-strict-mode ~ only_a_ptr, 08/2017
+    }
+    catch (Ogre::Exception e)
+    {
+        LOG("[RoR|Scripting] exception upon loading script file '"+filename+"', message: " + e.getFullDescription());
+        return -1;
+    }
+    // In some cases (i.e. when fed a full path with '/'-s on Windows), `openResource()` will silently return NULL for datastream. ~ only_a_ptr, 08/2017
+    if (ds.isNull())
+    {
+        LOG("[RoR|Scripting] Failed to load file '"+filename+"', reason unknown.");
+        return -1;
+    }
 
-	// Read the entire file
-	string code;
-	code.resize(ds->size());
-	ds->read(&code[0], ds->size());
+    // Read the entire file
+    std::string code;
+    code.resize(ds->size());
+    ds->read(&code[0], ds->size());
 
-	// hash it
-	{
-		char hash_result[250];
-		memset(hash_result, 0, 249);
-		RoR::CSHA1 sha1;
-		sha1.UpdateHash((uint8_t *)code.c_str(), (uint32_t)code.size());
-		sha1.Final();
-		sha1.ReportHash(hash_result, RoR::CSHA1::REPORT_HEX_SHORT);
-		hash = String(hash_result);
-	}
+    // hash it
+    {
+        char hash_result[250];
+        memset(hash_result, 0, 249);
+        RoR::CSHA1 sha1;
+        sha1.UpdateHash((uint8_t *)code.c_str(), (uint32_t)code.size());
+        sha1.Final();
+        sha1.ReportHash(hash_result, RoR::CSHA1::REPORT_HEX_SHORT);
+        hash = Ogre::String(hash_result);
+    }
 
-	return ProcessScriptSection(code.c_str(), filename);
+    return ProcessScriptSection(code.c_str(), code.length(), filename.c_str(), 0);
 }

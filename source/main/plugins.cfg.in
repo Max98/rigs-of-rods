@@ -1,0 +1,11 @@
+# Defines plugins to load
+
+# Define plugin folder
+PluginFolder=.
+
+# Define plugins
+Plugin=RenderSystem_GL
+@CFG_OGRE_RENDERSYSTEM_D3D9@
+Plugin=Plugin_ParticleFX
+Plugin=Plugin_OctreeSceneManager
+Plugin=Plugin_CgProgramManager

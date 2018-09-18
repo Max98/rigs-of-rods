@@ -1,162 +1,138 @@
 /*
-This source file is part of Rigs of Rods
-Copyright 2005-2012 Pierre-Michel Ricordel
-Copyright 2007-2012 Thomas Fischer
+    This source file is part of Rigs of Rods
+    Copyright 2005-2012 Pierre-Michel Ricordel
+    Copyright 2007-2012 Thomas Fischer
+    Copyright 2015-2017 Petr Ohlidal & contributors
 
-For more information, see http://www.rigsofrods.com/
+    For more information, see http://www.rigsofrods.org/
 
-Rigs of Rods is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License version 3, as
-published by the Free Software Foundation.
+    Rigs of Rods is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License version 3, as
+    published by the Free Software Foundation.
 
-Rigs of Rods is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
+    Rigs of Rods is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+    GNU General Public License for more details.
 
-You should have received a copy of the GNU General Public License
-along with Rigs of Rods.  If not, see <http://www.gnu.org/licenses/>.
+    You should have received a copy of the GNU General Public License
+    along with Rigs of Rods. If not, see <http://www.gnu.org/licenses/>.
 */
-#pragma once
-#ifndef __RoRFrameListener_H_
-#define __RoRFrameListener_H_
 
+#pragma once
+
+#include "BeamFactory.h"
+#include "CharacterFactory.h"
+#include "EnvironmentMap.h"
+#include "ForceFeedback.h"
 #include "RoRPrerequisites.h"
 
+
 #include <Ogre.h>
-#include <pthread.h>
 
-class RoRFrameListener: public Ogre::FrameListener, public Ogre::WindowEventListener, public ZeroedMemoryAllocator
+/// The simulation controller object
+/// It's lifetime is tied to single gameplay session. When user returns to main menu, it's destroyed.
+///
+/// RoR's gameplay is quite simple in structure, it consists of:
+///  - static terrain:  static elevation map, managed by `TerrainManager` singleton.
+///                     this includes static collision objects (or intrusion detection objects), managed by `TerrainObjectManager`.
+///  - softbody actors: a.k.a "trucks" or "vehicles", managed by `ActorManager`. They collide with static terrain and each other.
+///                     this includes 'fixes' - actors with partially fixed position.
+///  - characters:      player-controlled human figures with their own primitive physics, managed by `CharacterFactory`
+///                     these only collide with static terrain, not actors.
+/// For convenience and to help manage interactions, this class provides methods to manipulate these elements.
+class SimController: public Ogre::FrameListener, public Ogre::WindowEventListener, public ZeroedMemoryAllocator
 {
-	friend class RoR::MainThread; // Temporary hack
-
 public:
+    SimController(RoR::ForceFeedback* ff, RoR::SkidmarkConfig* skid_conf);
 
-	RoRFrameListener();
-	virtual ~RoRFrameListener();
+    // Ogre::FrameListener public interface
+    bool   frameStarted          (const Ogre::FrameEvent& evt) override;
+    bool   frameRenderingQueued  (const Ogre::FrameEvent& evt) override;
+    bool   frameEnded            (const Ogre::FrameEvent& evt) override;
 
-	ChatSystem *netChat;
+    // Actor management interface
+    Actor* GetActorById          (int actor_id)            { return m_actor_manager.GetActorByIdInternal(actor_id); }
+    void   SetPlayerActorById    (int actor_id);                                                          // TODO: Eliminate, use pointers ~ only_a_ptr, 06/2017
+    void   SetPlayerActor        (Actor* actor);
+    Actor* GetPlayerActor        ()                        { return m_player_actor; }
+    void   ReloadPlayerActor     ();
+    void   RemovePlayerActor     ();
+    void   RemoveActorByCollisionBox(std::string const & ev_src_instance_name, std::string const & box_name); ///< Scripting utility. TODO: Does anybody use it? ~ only_a_ptr, 08/2017
 
-	bool freeTruckPosition; // Used for initial truck loading
+    // Scripting interface
+    double getTime               () { return m_time; }
+    void   UpdateDirectionArrow  (char* text, Ogre::Vector3 position);
+    void   ShowLoaderGUI         (int type, const Ogre::String& instance, const Ogre::String& box);
+    void   StartRaceTimer        ();
+    float  StopRaceTimer         ();
+    bool   LoadTerrain           (); ///< Reads GVar 'sim_terrain_pending'
 
-	float netcheckGUITimer;
+    // GUI interface
+    void   TeleportPlayer        (RoR::Terrn2Telepoint* telepoint); // Teleport UI
+    void   TeleportPlayerXZ      (float x, float y); // Teleport UI
 
-	int loading_state;
-	
-	Ogre::Vector3 reload_pos;
+    /// @return True if everything was prepared OK and simulation may start.
+    bool   SetupGameplayLoop     ();
+    void   EnterGameplayLoop     ();
 
-	void setSimPaused(bool state) { isSimPaused = state; }
+    RoR::ActorManager*           GetBeamFactory  ()         { return &m_actor_manager; } // TODO: Eliminate this. All operations upon actors should be done through above methods. ~ only_a_ptr, 06/2017
+    RoR::SkidmarkConfig*        GetSkidmarkConf ()         { return m_skidmark_conf; }
 
-	void StartRaceTimer();
+private:
 
-	float StopRaceTimer();
+    // Ogre::WindowEventListener interface
+    void   windowMoved             (Ogre::RenderWindow* rw);
+    void   windowClosed            (Ogre::RenderWindow* rw);
+    void   windowFocusChange       (Ogre::RenderWindow* rw);
+    void   windowResized           (Ogre::RenderWindow* rw);
 
-	void UpdateRacingGui();
+    int PreDefineSkyXExemple; //For predefined skyx weathers
 
-	bool IsRaceInProgress()
-	{
-		return m_race_in_progress;
-	}
+    void   UpdateForceFeedback     (float dt);
+    bool   UpdateInputEvents       (float dt);
+    void   UpdateRacingGui         ();
+    void   FinalizeActorSpawning   (Actor* local_actor, Actor* previous_actor);
+    void   HideGUI                 (bool hidden);
+    void   CleanupAfterSimulation  (); /// Unloads all data
 
-protected:
+    Actor*                   m_player_actor;           //!< Actor (vehicle or machine) mounted and controlled by player
+    Actor*                   m_prev_player_actor;      //!< Previous actor (vehicle or machine) mounted and controlled by player
+    RoR::ActorManager        m_actor_manager;
+    RoR::CharacterFactory    m_character_factory;
+    RoR::GfxEnvmap           m_gfx_envmap;
+    HeatHaze*                m_heathaze;
+    RoR::SkidmarkConfig*     m_skidmark_conf;
+    Ogre::Real               m_time_until_next_toggle; //!< just to stop toggles flipping too fast
+    float                    m_last_simulation_speed;  //!< previously used time ratio between real time (evt.timeSinceLastFrame) and physics time ('dt' used in calcPhysics)
+    bool                     m_is_pace_reset_pressed;
+    int                      m_stats_on;
+    float                    m_netcheck_gui_timer;
+    collision_box_t*         m_reload_box;
+    double                   m_time;
+    RoR::ForceFeedback*      m_force_feedback;
+    bool                     m_hide_gui;
+    bool                     m_was_app_window_closed;
+    bool                     m_actor_info_gui_visible;
+    bool                     m_pressure_pressed;
 
-#ifdef USE_MPLATFORM
-	MPlatform_Base *mplatform;
-#endif //USE_MPLATFORM
+    CacheEntry*              m_last_cache_selection;
+    RoR::SkinDef*            m_last_skin_selection;
+    std::vector<std::string> m_last_vehicle_configs;
 
-	Dashboard *dashboard;
-	DOFManager *dof;
-	ForceFeedback *forcefeedback;
-	HeatHaze *heathaze;
+    bool                     m_is_dir_arrow_visible;
+    Ogre::Vector3            m_dir_arrow_pointed;
 
-	Ogre::Quaternion reload_dir;
-	Ogre::Real mTimeUntilNextToggle; // just to stop toggles flipping too fast
-	Ogre::Vector3 dirArrowPointed;
-	Ogre::Vector3 persostart;
+    int                      m_last_screenshot_id;
+    Ogre::String             m_last_screenshot_date;
 
-	unsigned long      m_race_start_time;
-	bool               m_race_in_progress;
-	float			   m_race_bestlap_time;
+    unsigned long            m_race_start_time;
+    bool                     m_race_in_progress;
+    float                    m_race_bestlap_time;
 
-	bool dirvisible;
-	bool enablePosStor;
-	bool flipflop;
-	bool hidegui;
-	bool mTruckInfoOn;
-	bool pressure_pressed;
+    bool                     m_advanced_vehicle_repair;
+    float                    m_advanced_vehicle_repair_timer;
 
-	bool isSimPaused;
-
-	char screenshotformat[256];
-	
-	collision_box_t *reload_box;
-	double rtime;
-
-	float clutch;
-	float terrainxsize;
-	float terrainzsize;
-	//float truckx, trucky, truckz;
-
-	int mStatsOn;
-	int netPointToUID;
-	int raceStartTime;
-
-	unsigned int mNumScreenShots;
-	
-	bool updateTruckMirrors(float dt);
-
-	int setupBenchmark();
-
-	void gridScreenshots(Ogre::RenderWindow* pRenderWindow, Ogre::Camera* pCamera, const int& pGridSize, const Ogre::String& path, const Ogre::String& pFileName, const Ogre::String& pFileExtention, const bool& pStitchGridImages);
-
-	void initSoftShadows();
-	void initializeCompontents();
-	void updateIO(float dt);
-	void updateStats(void);
-
-	// WindowEventListener
-	void windowMoved(Ogre::RenderWindow* rw);
-	void windowClosed(Ogre::RenderWindow* rw);
-	void windowFocusChange(Ogre::RenderWindow* rw);
-
-public: // public methods
-
-	bool RTSSgenerateShadersForMaterial(Ogre::String curMaterialName, Ogre::String normalTextureName);
-	bool frameEnded(const Ogre::FrameEvent& evt);
-	bool frameStarted(const Ogre::FrameEvent& evt); // Override frameStarted event to process that (don't care about frameEnded)
-
-	bool updateEvents(float dt);
-	double getTime() { return rtime; };
-
-	int getLoadingState() { return loading_state; };
-	int getNetPointToUID() { return netPointToUID; };
-
-	void checkRemoteStreamResultsChanged();
-	void hideGUI(bool visible);
-	void hideMap();
-	void InitTrucks(
-        bool loadmanual, 
-        std::string const & selected, 
-        int cache_entry_number = -1,
-        std::string const & selectedExtension = "",
-        const std::vector<Ogre::String> *truckconfig = nullptr,
-        bool enterTruck = false,
-        Skin *skin = nullptr
-        );
-
-	void netDisconnectTruck(int number);
-	void pauseSim(bool value);
-	void reloadCurrentTruck();
-	void removeBeam(Beam *);
-	void RTSSgenerateShaders(Ogre::Entity *entity, Ogre::String normalTextureName);
-	void setDirectionArrow(char *text, Ogre::Vector3 position);
-	void setLoadingState(int value);
-	void setNetPointToUID(int uid);
-	void showLoad(int type, const Ogre::String &instance, const Ogre::String &box);
-	void showspray(bool s);
-	void shutdown_final();
-	void Restart();
-	void windowResized(Ogre::RenderWindow* rw); // TODO: make this private, it's public for legacy reasons.
+    Ogre::Vector3            m_reload_pos;
+    Ogre::Quaternion         m_reload_dir;
 };
-
-#endif // __RoRFrameListener_H_

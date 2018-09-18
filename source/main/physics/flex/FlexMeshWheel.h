@@ -1,131 +1,103 @@
 /*
-	This source file is part of Rigs of Rods
-	Copyright 2005-2012 Pierre-Michel Ricordel
-	Copyright 2007-2012 Thomas Fischer
-	Copyright 2013-2015 Petr Ohlidal
+    This source file is part of Rigs of Rods
+    Copyright 2005-2012 Pierre-Michel Ricordel
+    Copyright 2007-2012 Thomas Fischer
+    Copyright 2013-2017 Petr Ohlidal & contributors
 
-	For more information, see http://www.rigsofrods.com/
+    For more information, see http://www.rigsofrods.org/
 
-	Rigs of Rods is free software: you can redistribute it and/or modify
-	it under the terms of the GNU General Public License version 3, as
-	published by the Free Software Foundation.
+    Rigs of Rods is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License version 3, as
+    published by the Free Software Foundation.
 
-	Rigs of Rods is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY; without even the implied warranty of
-	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-	GNU General Public License for more details.
+    Rigs of Rods is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+    GNU General Public License for more details.
 
-	You should have received a copy of the GNU General Public License
-	along with Rigs of Rods. If not, see <http://www.gnu.org/licenses/>.
+    You should have received a copy of the GNU General Public License
+    along with Rigs of Rods. If not, see <http://www.gnu.org/licenses/>.
 */
 
 #pragma once
 
-#include "RoRPrerequisites.h"
-
+#include "ForwardDeclarations.h"
 #include "FlexMesh.h"
 
-#include <OgreString.h>
-#include <OgreEntity.h>
 #include <OgreVector3.h>
 #include <OgreMesh.h>
 #include <OgreSubMesh.h>
 #include <OgreHardwareBuffer.h>
+#include <string>
 
+/// Consists of static mesh, representing the rim, and dynamic mesh, representing the tire.
 class FlexMeshWheel: public Flexable
 {
+    friend class RoR::FlexFactory;
+
 public:
 
-	FlexMeshWheel(
-		Ogre::String const & name,
-		node_t *nds, 
-		int axis_node_1_index, 
-		int axis_node_2_index, 
-		int nstart, 
-		int nrays, 
-		Ogre::String const & mesh_name,
-		Ogre::String const & material_name,
-		float rimradius, 
-		bool rimreverse, 
-		MaterialFunctionMapper *material_function_mapper,
-		Skin *used_skin,
-		MaterialReplacer *material_replacer
-	);
+    ~FlexMeshWheel();
 
-	Ogre::Entity *getRimEntity() { return rimEnt; };
+    Ogre::Entity* getRimEntity() { return m_rim_entity; };
+    Ogre::Entity* GetTireEntity() { return m_tire_entity; }
 
-	Ogre::Vector3 updateVertices();
-	Ogre::Vector3 updateShadowVertices();
+    Ogre::Vector3 updateVertices();
 
-	// Flexable
-	bool flexitPrepare(Beam* b);
-	void flexitCompute();
-	Ogre::Vector3 flexitFinal();
+    // Flexable
+    bool flexitPrepare();
+    void flexitCompute();
+    Ogre::Vector3 flexitFinal();
 
-	void setVisible(bool visible);
+    void setVisible(bool visible);
 
 private:
 
-	MaterialReplacer *mr;
-	
-	struct CoVertice_t
-	{
-		Ogre::Vector3 vertex;
-		Ogre::Vector3 normal;
-		//Ogre::Vector3 color;
-		Ogre::Vector2 texcoord;
-	};
+    FlexMeshWheel( // Use FlexFactory
+        Ogre::Entity* rim_prop_entity,
+        node_t* nds,
+        int axis_node_1_index,
+        int axis_node_2_index,
+        int nstart,
+        int nrays,
+        std::string const& tire_mesh_name,
+        std::string const& tire_material_name,
+        float rimradius,
+        bool rimreverse
+    );
 
-	struct posVertice_t
-	{
-		Ogre::Vector3 vertex;
-	};
+    struct FlexMeshWheelVertex
+    {
+        Ogre::Vector3 position;
+        Ogre::Vector3 normal;
+        Ogre::Vector2 texcoord;
+    };
 
-	struct norVertice_t
-	{
-		Ogre::Vector3 normal;
-		//Ogre::Vector3 color;
-		Ogre::Vector2 texcoord;
-	};
+    // Wheel
+    size_t           m_num_rays;
+    float            m_rim_radius;
+    node_t*          m_all_nodes;
+    int              m_axis_node0_idx;
+    int              m_axis_node1_idx;
+    int              m_start_node_idx; ///< First node (lowest index) belonging to this wheel.
 
-	Ogre::MeshPtr msh;
-	Ogre::SubMesh* sub;
-	Ogre::VertexDeclaration* decl;
-	Ogre::HardwareVertexBufferSharedPtr vbuf;
+    // Meshes
+    Ogre::Vector3    m_flexit_center;
+    Ogre::MeshPtr    m_mesh;
+    Ogre::SubMesh*   m_submesh;
+    bool             m_is_rim_reverse;
+    Ogre::Entity*    m_rim_entity;
+    Ogre::Entity*    m_tire_entity; // Assigned by friend FlexFactory
+    Ogre::SceneNode* m_rim_scene_node;
 
-	size_t nVertices;
-	size_t vbufCount;
+    // Vertices
+    float            m_norm_y;
+    size_t           m_vertex_count;
+    FlexMeshWheelVertex* m_vertices;
+    Ogre::VertexDeclaration* m_vertex_format;
+    Ogre::HardwareVertexBufferSharedPtr m_hw_vbuf;
 
-	//shadow
-	union
-	{
-		float *shadowposvertices;
-		posVertice_t *coshadowposvertices;
-	};
-	union
-	{
-		float *shadownorvertices;
-		norVertice_t *coshadownorvertices;
-	};
-	union
-	{
-		float *vertices;
-		CoVertice_t *covertices;
-	};
-
-	//nodes
-	//int *nodeIDs;
-	int id0;
-	int id1;
-	int idstart;
-
-	size_t ibufCount;
-	unsigned short *faces;
-	node_t *nodes;
-	int nbrays;
-	float rim_radius;
-	Ogre::SceneNode *rnode;
-	float normy;
-	bool revrim;
-	Ogre::Entity *rimEnt;
+    // Indices
+    size_t           m_index_count;
+    unsigned short*  m_indices;
 };

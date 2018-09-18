@@ -1,63 +1,94 @@
 /*
-	This source file is part of Rigs of Rods
-	Copyright 2005-2012 Pierre-Michel Ricordel
-	Copyright 2007-2012 Thomas Fischer
-	Copyright 2013-2015 Petr Ohlidal
+    This source file is part of Rigs of Rods
+    Copyright 2005-2012 Pierre-Michel Ricordel
+    Copyright 2007-2012 Thomas Fischer
+    Copyright 2013-2017 Petr Ohlidal & contributors
 
-	For more information, see http://www.rigsofrods.com/
+    For more information, see http://www.rigsofrods.org/
 
-	Rigs of Rods is free software: you can redistribute it and/or modify
-	it under the terms of the GNU General Public License version 3, as
-	published by the Free Software Foundation.
+    Rigs of Rods is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License version 3, as
+    published by the Free Software Foundation.
 
-	Rigs of Rods is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY; without even the implied warranty of
-	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-	GNU General Public License for more details.
+    Rigs of Rods is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+    GNU General Public License for more details.
 
-	You should have received a copy of the GNU General Public License
-	along with Rigs of Rods. If not, see <http://www.gnu.org/licenses/>.
+    You should have received a copy of the GNU General Public License
+    along with Rigs of Rods. If not, see <http://www.gnu.org/licenses/>.
 */
 
-/**
-	@file   ForwardDeclarations.h
-	@brief  Global forward declarations.
-	@author Petr Ohlidal
-	@date   12/2013
-*/
+
+/// @file   ForwardDeclarations.h
+/// @brief  Global forward declarations.
+/// @author Petr Ohlidal
+/// @date   12/2013
+
 
 #pragma once
 
 namespace RoR
 {
-	class  Application;
-	class  ContentManager;
-	class  GUIManager;
-	class  GuiManagerInterface;
-	class  MainThread;
-	class  OgreSubsystem;
-	struct PlatformUtils;
+    class  ActorManager;
+    class  ConfigFile;
+    class  Console;
+    class  ContentManager;
+    class  FlexFactory;
+    class  GfxActor;
+    class  GUIManager;
+    struct GuiManagerImpl;
+    class  GuiManagerInterface;
+    class  MainMenu;
+    class  OgreSubsystem;
+    struct PlatformUtils;
     class  RigLoadingProfiler;
-	class  SceneMouse;
-	class  SkinManager;
-	class  Console;
+    class  SceneMouse;
+    class  Skidmark;
+    class  SkidmarkConfig;
+    struct SkinDef;
+    class  SkinManager;
+    struct Terrn2Author;
+    struct Terrn2Def;
+    class  Terrn2Parser;
+    struct Terrn2Telepoint;
 
-	namespace GUI
-	{
-		class  OpenSaveFileDialog;
-		class  Dialog;
-	}
-}
+    namespace GUI
+    {
+        class  Dialog;
+        class  FrictionSettings;
+        class  GameMainMenu;
+        class  GamePauseMenu;
+        class  LoadingWindow;
+        class  MainSelector;
+        class  MpClientList;
+        class  MultiplayerSelector;
+        class  OpenSaveFileDialog;
+        class  SimUtils;
+        class  TeleportWindow;
+        class  TopMenubar;
+    }
+} // namespace RoR
 
 namespace MyGUI
 {
-	class  OgrePlatform;
+    class  OgrePlatform;
+}
+
+namespace RoRnet
+{
+    struct Header;
+    struct UserInfo;
+    struct StreamRegister;
+    struct ActorStreamRegister;
+    struct ServerInfo;
+    struct VehicleState;
 }
 
 struct node_t;
 struct beam_t;
 struct shock_t;
-struct collcab_rate_t;
+struct eventsource_t;
 struct soundsource_t;
 struct contacter_t;
 struct rigidifier_t;
@@ -73,25 +104,26 @@ struct rope_t;
 struct exhaust_t;
 struct cparticle_t;
 struct debugtext_t;
-struct rig_t;
 struct collision_box_t;
 struct tie_t;
 struct hook_t;
 struct ground_model_t;
 struct client_t;
 struct authorinfo_t;
-struct user_info_t;
 
 namespace MOC
 {
-	class CollisionTools;
+    class CollisionTools;
 }
 
 namespace Ogre
 {
-	class MovableText;
-	class TerrainGroup;
-	class ConfigFile;
+    class Camera;
+    class ConfigFile;
+    class MovableText;
+    class Overlay;
+    class RenderTarget;
+    class TerrainGroup;
 }
 
 class AeroEngine;
@@ -99,9 +131,8 @@ class Airbrake;
 class Airfoil;
 class Autopilot;
 class Axle;
-class Beam;
-class BeamEngine;
-class BeamFactory;
+class Actor;
+class EngineSim;
 class BeamThreadStats;
 class Buoyance;
 class CacheEntry;
@@ -118,6 +149,7 @@ class DashBoardManager;
 class DOFManager;
 class DotSceneLoader;
 class DustPool;
+class DustManager;
 class Editor;
 class Envmap;
 class Flexable;
@@ -137,33 +169,31 @@ class IWater;
 class HydraxWater;
 class Landusemap;
 class MapTextureCreator;
-class MaterialFunctionMapper;
-class MaterialReplacer;
 class MeshObject;
-class Mirrors;
+class Mirror;
+class MumbleIntegration;
 class Network;
 class OverlayWrapper;
 class OutProtocol;
 class PointColDetector;
 class PositionStorage;
 class ProceduralManager;
-class Rail;
+class RailSegment;
 class RailGroup;
 class Replay;
 class RigsOfRods;
-class RigSpawner;
+class ActorSpawner;
 class Road2;
 class Road;
-class RoRFrameListener;
+class SimController;
 class ScopeLog;
 class Screwprop;
-class Skidmark;
-class Skin;
 class SkyManager;
+class SkyXManager;
 class SlideNode;
 class ShadowManager;
+class Sound;
 class SoundManager;
-class RigInspector; // Debug utility; located in [root]/tools/rig_inspector
 class SoundScriptInstance;
 class SoundScriptManager;
 class Streamable;
@@ -177,10 +207,10 @@ class ThreadPool;
 class ThreadWorker;
 class TorqueCurve;
 class TruckEditor;
-class TruckHUD;
 class Turbojet;
 class Turboprop;
 class VideoCamera;
+class VehicleAI;
 class Water;
 
 #ifdef USE_SOCKETW

@@ -1,174 +1,164 @@
 /*
-This source file is part of Rigs of Rods
-Copyright 2005-2012 Pierre-Michel Ricordel
-Copyright 2007-2012 Thomas Fischer
+    This source file is part of Rigs of Rods
+    Copyright 2005-2012 Pierre-Michel Ricordel
+    Copyright 2007-2012 Thomas Fischer
 
-For more information, see http://www.rigsofrods.com/
+    For more information, see http://www.rigsofrods.org/
 
-Rigs of Rods is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License version 3, as
-published by the Free Software Foundation.
+    Rigs of Rods is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License version 3, as
+    published by the Free Software Foundation.
 
-Rigs of Rods is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
+    Rigs of Rods is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+    GNU General Public License for more details.
 
-You should have received a copy of the GNU General Public License
-along with Rigs of Rods.  If not, see <http://www.gnu.org/licenses/>.
+    You should have received a copy of the GNU General Public License
+    along with Rigs of Rods. If not, see <http://www.gnu.org/licenses/>.
 */
+
 #include "SurveyMapTextureCreator.h"
 
-#include "BeamFactory.h"
+#include "Application.h"
 #include "IWater.h"
-#include "ResourceBuffer.h"
 #include "SurveyMapManager.h"
 #include "TerrainManager.h"
 
 using namespace Ogre;
+using namespace RoR;
 
 int SurveyMapTextureCreator::mCounter = 0;
 
 SurveyMapTextureCreator::SurveyMapTextureCreator() :
-	  mCamera(NULL)
-	, mMaterial(NULL)
-	, mRttTex(NULL)
-	, mStatics(NULL)
-	, mTextureUnitState(NULL)
-	, mViewport(NULL)
-	, mMapCenter(Vector2::ZERO)
-	, mMapSize(Vector3::ZERO)
-	, mMapZoom(0.0f)
+    mCamera(nullptr)
+    , mRttTex(nullptr)
+    , mStatics(nullptr)
+    , mTextureUnitState(nullptr)
+    , mViewport(nullptr)
+    , mMapCenter(Vector2::ZERO)
+    , mMapSize(Vector3::ZERO)
+    , mMapZoom(0.0f)
 {
-	mCounter++;
-	init();
+    mCounter++;
+    init();
 }
 
 bool SurveyMapTextureCreator::init()
 {
-	TexturePtr texture = TextureManager::getSingleton().createManual(getTextureName(), ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, TEX_TYPE_2D, 2048, 2048, TU_RENDERTARGET, PF_R8G8B8, TU_RENDERTARGET, new ResourceBuffer());
-	
-	if ( texture.isNull() ) return false;;
+    TexturePtr texture = TextureManager::getSingleton().createManual(getTextureName(), ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, TEX_TYPE_2D, 2048, 2048, TU_RENDERTARGET, PF_R8G8B8, TU_RENDERTARGET);
 
-	mRttTex = texture->getBuffer()->getRenderTarget();
+    if (texture.isNull())
+        return false;;
 
-	if ( !mRttTex ) return false;
+    mRttTex = texture->getBuffer()->getRenderTarget();
 
-	mRttTex->setAutoUpdated(false);
+    if (!mRttTex)
+        return false;
 
-	mCamera = gEnv->sceneManager->createCamera(getCameraName());
+    mRttTex->setAutoUpdated(false);
 
-	mViewport = mRttTex->addViewport(mCamera);
-	mViewport->setBackgroundColour(ColourValue::Black);
-	mViewport->setOverlaysEnabled(false);
-	mViewport->setShadowsEnabled(false);
-	mViewport->setSkiesEnabled(false);
+    mCamera = gEnv->sceneManager->createCamera(getCameraName());
 
-	mMaterial = MaterialManager::getSingleton().create(getMaterialName(), ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    mViewport = mRttTex->addViewport(mCamera);
+    mViewport->setBackgroundColour(ColourValue::Black);
+    mViewport->setOverlaysEnabled(false);
+    mViewport->setShadowsEnabled(false);
+    mViewport->setSkiesEnabled(false);
 
-	if ( mMaterial.isNull() ) return false;
+    mMaterial = MaterialManager::getSingleton().create(getMaterialName(), ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
 
-	mTextureUnitState = mMaterial->getTechnique(0)->getPass(0)->createTextureUnitState(getTextureName());
+    if (mMaterial.isNull())
+        return false;
 
-	mRttTex->addListener(this);
+    mTextureUnitState = mMaterial->getTechnique(0)->getPass(0)->createTextureUnitState(getTextureName());
 
-	mCamera->setFixedYawAxis(false);
-	mCamera->setProjectionType(PT_ORTHOGRAPHIC);
-	mCamera->setNearClipDistance(1.0f);
+    mRttTex->addListener(this);
 
-	return true;
+    mCamera->setFixedYawAxis(false);
+    mCamera->setProjectionType(PT_ORTHOGRAPHIC);
+    mCamera->setNearClipDistance(1.0f);
+
+    return true;
 }
 
-void SurveyMapTextureCreator::setStaticGeometry(StaticGeometry *staticGeometry)
+void SurveyMapTextureCreator::setStaticGeometry(StaticGeometry* staticGeometry)
 {
-	mStatics = staticGeometry;
+    mStatics = staticGeometry;
 }
 
 void SurveyMapTextureCreator::update()
 {
-	if ( !mRttTex ) return;
+    if (!mRttTex)
+        return;
 
-	mMapSize = Vector3::ZERO;
-	mMapCenter = Vector2::ZERO;
-	mMapZoom = 0.0f;
+    mMapSize = Vector3::ZERO;
+    mMapCenter = Vector2::ZERO;
+    mMapZoom = 0.0f;
 
-	if (gEnv->terrainManager)
-		mMapSize = gEnv->surveyMap->getMapSize();
+    if (App::GetSimTerrain())
+        mMapSize = gEnv->surveyMap->getMapSize();
 
-	if (gEnv->surveyMap)
-	{
-		mMapCenter = gEnv->surveyMap->getMapCenter();
-		mMapZoom   = gEnv->surveyMap->getMapZoom();
-	}
+    if (gEnv->surveyMap)
+    {
+        mMapCenter = gEnv->surveyMap->getMapCenter();
+        mMapZoom = gEnv->surveyMap->getMapZoom();
+    }
 
-	float orthoWindowWidth  = mMapSize.x - (mMapSize.x - 20.0f) * mMapZoom;
-	float orthoWindowHeight = mMapSize.z - (mMapSize.z - 20.0f) * mMapZoom;
+    float orthoWindowWidth = mMapSize.x - (mMapSize.x - 20.0f) * mMapZoom;
+    float orthoWindowHeight = mMapSize.z - (mMapSize.z - 20.0f) * mMapZoom;
 
-	mCamera->setFarClipDistance(mMapSize.y + 3.0f);
-	mCamera->setOrthoWindow(orthoWindowWidth, orthoWindowHeight);
-	mCamera->setPosition(Vector3(mMapCenter.x, mMapSize.y + 2.0f, mMapCenter.y));
-	mCamera->lookAt(Vector3(mMapCenter.x, 0.0f, mMapCenter.y));
+    mCamera->setFarClipDistance(mMapSize.y + 3.0f);
+    mCamera->setOrthoWindow(orthoWindowWidth, orthoWindowHeight);
+    mCamera->setPosition(Vector3(mMapCenter.x, mMapSize.y + 2.0f, mMapCenter.y));
+    mCamera->lookAt(Vector3(mMapCenter.x, 0.0f, mMapCenter.y));
 
-	preRenderTargetUpdate();
+    preRenderTargetUpdate();
 
-	mRttTex->update();
+    mRttTex->update();
 
-	postRenderTargetUpdate();
+    postRenderTargetUpdate();
 }
 
 String SurveyMapTextureCreator::getMaterialName()
 {
-	return "MapRttMat" + TOSTRING(mCounter);
+    return "MapRttMat" + TOSTRING(mCounter);
 }
 
 String SurveyMapTextureCreator::getCameraName()
 {
-	return "MapRttCam" + TOSTRING(mCounter);
+    return "MapRttCam" + TOSTRING(mCounter);
 }
 
 String SurveyMapTextureCreator::getTextureName()
 {
-	return "MapRttTex" + TOSTRING(mCounter);
+    return "MapRttTex" + TOSTRING(mCounter);
 }
 
 void SurveyMapTextureCreator::preRenderTargetUpdate()
 {
-	Beam **trucks = BeamFactory::getSingleton().getTrucks();
+    if (mStatics)
+        mStatics->setRenderingDistance(0);
 
-	float f = 20.0f + 30.0f * mMapZoom;
-
-	for (int i=0; i < BeamFactory::getSingleton().getTruckCount(); i++)
-		if (trucks[i])
-			trucks[i]->preMapLabelRenderUpdate(true, f);
-
-	if (mStatics)
-		mStatics->setRenderingDistance(0);
-
-	IWater* water = gEnv->terrainManager->getWater();
-	if (water)
-	{
-		water->setCamera(mCamera);
-		water->moveTo(water->getHeight());
-		water->update();
-	}
+    IWater* water = App::GetSimTerrain()->getWater();
+    if (water)
+    {
+        water->WaterSetCamera(mCamera);
+        water->SetReflectionPlaneHeight(water->GetStaticWaterHeight());
+        water->UpdateWater();
+    }
 }
 
 void SurveyMapTextureCreator::postRenderTargetUpdate()
 {
-	Beam **trucks = BeamFactory::getSingleton().getTrucks();
+    if (mStatics)
+        mStatics->setRenderingDistance(1000);
 
-	for (int i=0; i < BeamFactory::getSingleton().getTruckCount(); i++)
-		if (trucks[i])
-			trucks[i]->preMapLabelRenderUpdate(false);
-
-	if (mStatics)
-		mStatics->setRenderingDistance(1000);
-
-	IWater* water = gEnv->terrainManager->getWater();
-	if (water)
-	{
-		water->setCamera(gEnv->mainCamera);
-		water->moveTo(water->getHeight());
-		water->update();
-	}
+    IWater* water = App::GetSimTerrain()->getWater();
+    if (water)
+    {
+        water->WaterSetCamera(gEnv->mainCamera);
+        water->SetReflectionPlaneHeight(water->GetStaticWaterHeight());
+        water->UpdateWater();
+    }
 }

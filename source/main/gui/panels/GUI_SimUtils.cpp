@@ -1,53 +1,52 @@
 /*
-	This source file is part of Rigs of Rods
-	Copyright 2005-2012 Pierre-Michel Ricordel
-	Copyright 2007-2012 Thomas Fischer
-	Copyright 2013-2014 Petr Ohlidal
+    This source file is part of Rigs of Rods
+    Copyright 2005-2012 Pierre-Michel Ricordel
+    Copyright 2007-2012 Thomas Fischer
+    Copyright 2013-2017 Petr Ohlidal & contributors
 
-	For more information, see http://www.rigsofrods.com/
+    For more information, see http://www.rigsofrods.org/
 
-	Rigs of Rods is free software: you can redistribute it and/or modify
-	it under the terms of the GNU General Public License version 3, as
-	published by the Free Software Foundation.
+    Rigs of Rods is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License version 3, as
+    published by the Free Software Foundation.
 
-	Rigs of Rods is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY; without even the implied warranty of
-	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-	GNU General Public License for more details.
+    Rigs of Rods is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+    GNU General Public License for more details.
 
-	You should have received a copy of the GNU General Public License
-	along with Rigs of Rods. If not, see <http://www.gnu.org/licenses/>.
+    You should have received a copy of the GNU General Public License
+    along with Rigs of Rods. If not, see <http://www.gnu.org/licenses/>.
 */
 
-/** 
-	@file   GUI_SimUtils.cpp
-	@author Moncef Ben Slimane
-	@date   12/2014
-*/
+/// @file
+/// @author Moncef Ben Slimane
+/// @date   12/2014
 
-/*
-	Notice:
-	This GUI is a little bit different from the others, so don't take as example.
-*/
+//  Notice:
+//  This GUI is a little bit different from the others, so don't take as example.
+//  This GUI class is a set of small independent info boxes. The main widget is invisible and un-clickable.
+
 #include "GUI_SimUtils.h"
 
+#include <MyGUI.h>
+#include <OgreRenderTarget.h>
+#include <OgreRenderWindow.h>
+#include <OgreRoot.h>
+
 #include "RoRPrerequisites.h"
+
 #include "Utils.h"
 #include "RoRVersion.h"
 #include "Language.h"
 #include "GUIManager.h"
 #include "Application.h"
 #include "OgreSubsystem.h"
-#include "OgreRenderWindow.h"
 #include "Beam.h"
 
 #include "AeroEngine.h"
 #include "BeamEngine.h"
 #include "ScrewProp.h"
-
-#include <MyGUI.h>
-#include <OgreRenderTarget.h>
-#include <OgreRoot.h>
 
 using namespace RoR;
 using namespace GUI;
@@ -57,289 +56,308 @@ using namespace GUI;
 
 CLASS::CLASS()
 {
-	//Usefull
-	MainThemeColor = U("#FF7D02");
-	WhiteColor = U("#FFFFFF");
-	RedColor = U("#DF2121");
-	BlueColor = U("#3399DD");
+    //Usefull
+    MainThemeColor = U("#FF7D02");
+    WhiteColor = U("#FFFFFF");
+    RedColor = U("#DF2121");
+    BlueColor = U("#3399DD");
 
-	MAIN_WIDGET->setUserString("interactive", "0");
-	MAIN_WIDGET->setPosition(0, 0);
+    MAIN_WIDGET->setUserString("interactive", "0");
+    MAIN_WIDGET->setPosition(0, 0);
 
-	MyGUI::IntSize screenSize = MyGUI::RenderManager::getInstance().getViewSize();
-	MAIN_WIDGET->setSize(screenSize);
+    MyGUI::IntSize screenSize = MyGUI::RenderManager::getInstance().getViewSize();
+    MAIN_WIDGET->setSize(screenSize);
 
-	truckstats = "";
+    m_actor_stats_str = "";
 
-	b_fpsbox = false;
-	b_truckinfo = false;
+    m_fps_box_visible = false;
+    m_actor_info_visible = false;
 
-	alpha = 1.0f;
+    m_notifi_box_alpha = 1.0f;
 
-	ShowMain(); //It's invisible and unclickable, so no worrys
+    m_notifications_disabled = false;
 }
 
 CLASS::~CLASS()
 {
-	HideMain();
-	//delete(MAIN_WIDGET);
+    this->SetBaseVisible(false);
 }
 
-void CLASS::ShowMain()
+void CLASS::SetBaseVisible(bool v)
 {
-	//Kinda of initialization
-	MAIN_WIDGET->setVisible(true);
+    if (!v)
+    {
+        this->SetFPSBoxVisible(false);
+        this->SetActorInfoBoxVisible(false);
+        this->HideNotificationBox();
+    }
+    MAIN_WIDGET->setVisible(v);
 }
 
-void CLASS::HideMain()
+bool CLASS::IsBaseVisible()
 {
-	MAIN_WIDGET->setVisible(false);
+    return MAIN_WIDGET->getVisible();
 }
 
-void CLASS::ToggleFPSBox()
+void CLASS::SetFPSBoxVisible(bool v)
 {
-	b_fpsbox = !b_fpsbox;
-	m_fpscounter_box->setVisible(b_fpsbox);
+    m_fps_box_visible = v;
+    m_fpscounter_box->setVisible(v);
 }
 
-void CLASS::ToggleTruckInfoBox()
+void CLASS::SetActorInfoBoxVisible(bool v)
 {
-	b_truckinfo = !b_truckinfo;
-	m_truckinfo_box->setVisible(b_truckinfo);
+    m_actor_info_visible = v;
+    m_truckinfo_box->setVisible(v);
 }
 
 void CLASS::PushNotification(Ogre::String Title, Ogre::String text)
 {
-	if (!MAIN_WIDGET->getVisible()) return;
+    if (!MAIN_WIDGET->getVisible())
+        return;
+    if (m_notifications_disabled)
+        return;
 
-	m_not_title->setCaption(Title);
-	m_not_text->setCaption(text);
-	m_notification->setVisible(true);
-	pushTime = Ogre::Root::getSingleton().getTimer()->getMilliseconds();
+    m_not_title->setCaption(Title);
+    m_not_text->setCaption(text);
+    m_notification->setVisible(true);
+    m_last_notifi_push_time = Ogre::Root::getSingleton().getTimer()->getMilliseconds();
 }
 
-void CLASS::framestep(float dt)
+void CLASS::HideNotificationBox()
 {
-	if (!MAIN_WIDGET->getVisible()) return;
-
-	unsigned long ot = Ogre::Root::getSingleton().getTimer()->getMilliseconds();
-	if (m_notification->getVisible())
-	{
-		unsigned long endTime = pushTime + 5000;
-		unsigned long startTime = endTime - (long)1000.0f;
-		if (ot < startTime)
-		{
-			alpha = 1.0f;
-		}
-		else
-		{
-			alpha = 1 - ((ot - startTime) / 1000.0f);
-		}
-
-		m_notification->setAlpha(alpha);
-
-		if (alpha <= 0.1)
-			m_notification->setVisible(false);
-	}
+    m_notification->setVisible(false);
 }
 
-void CLASS::UpdateStats(float dt, Beam *truck)
+void CLASS::DisableNotifications(bool disabled)
 {
-	if (!MAIN_WIDGET->getVisible()) return;
+    m_notifications_disabled = disabled;
+}
 
-	if (b_fpsbox)
-	{
-		const Ogre::RenderTarget::FrameStats& stats = Application::GetOgreSubsystem()->GetRenderWindow()->getStatistics();
-		m_cur_fps->setCaptionWithReplacing("Current FPS: " + Ogre::StringConverter::toString(stats.lastFPS));
-		m_avg_fps->setCaptionWithReplacing("Average FPS: " + Ogre::StringConverter::toString(stats.avgFPS));
-		m_worst_fps->setCaptionWithReplacing("Worst FPS: " + Ogre::StringConverter::toString(stats.worstFPS));
-		m_best_fps->setCaptionWithReplacing("Best FPS: " + Ogre::StringConverter::toString(stats.bestFPS));
-		m_triangle_count->setCaptionWithReplacing("Triangle count: " + Ogre::StringConverter::toString(stats.triangleCount));
-		m_batch_count->setCaptionWithReplacing("Batch count: " + Ogre::StringConverter::toString(stats.batchCount));
-	}
-	else
-		m_fpscounter_box->setVisible(false);
+void CLASS::FrameStepSimGui(float dt)
+{
+    if (!MAIN_WIDGET->getVisible())
+        return;
 
-	if (b_truckinfo && truck != nullptr)
-	{
-		m_truck_name->setCaptionWithReplacing(truck->getTruckName());
-		truckstats = "\n"; //always reset on each frame + space
+    unsigned long ot = Ogre::Root::getSingleton().getTimer()->getMilliseconds();
+    if (m_notification->getVisible())
+    {
+        unsigned long endTime = m_last_notifi_push_time + 5000;
+        unsigned long startTime = endTime - (long)1000.0f;
+        if (ot < startTime)
+        {
+            m_notifi_box_alpha = 1.0f;
+        }
+        else
+        {
+            m_notifi_box_alpha = 1 - ((ot - startTime) / 1000.0f);
+        }
 
-		//taken from TruckHUD.cpp, needs cleanup
-		beam_t *beam = truck->getBeams();
-		float average_deformation = 0.0f;
-		float beamstress = 0.0f;
-		float current_deformation = 0.0f;
-		float mass = truck->getTotalMass();
-		int beamCount = truck->getBeamCount();
-		int beambroken = 0;
-		int beamdeformed = 0;
+        m_notification->setAlpha(m_notifi_box_alpha);
 
-		for (int i = 0; i < beamCount; i++, beam++)
-		{
-			if (beam->broken != 0)
-			{
-				beambroken++;
-			}
-			beamstress += beam->stress;
-			current_deformation = fabs(beam->L - beam->refL);
-			if (fabs(current_deformation) > 0.0001f && beam->type != BEAM_HYDRO && beam->type != BEAM_INVISIBLE_HYDRO)
-			{
-				beamdeformed++;
-			}
-			average_deformation += current_deformation;
-		}
+        if (m_notifi_box_alpha <= 0.1)
+            m_notification->setVisible(false);
+    }
+}
 
+void CLASS::UpdateStats(float dt, Actor* actor)
+{
+    if (!MAIN_WIDGET->getVisible())
+        return;
 
-		float health = ((float)beambroken / (float)beamCount) * 10.0f + ((float)beamdeformed / (float)beamCount);
-		if (health < 1.0f)
-		{
-			truckstats = truckstats + MainThemeColor + "Vehicle's health: " + WhiteColor + TOUTFSTRING(Round((1.0f - health) * 100.0f, 2)) + U("%") + "\n";
-		}
-		else if (health >= 1.0f)
-		{
-			//When this condition is true, it means that health is at 0% which means 100% of destruction.
-			truckstats = truckstats + MainThemeColor + "Vehicle's destruction: " + WhiteColor + U("100%") + "\n";
-		}
+    if (m_fps_box_visible)
+    {
+        const Ogre::RenderTarget::FrameStats& stats = App::GetOgreSubsystem()->GetRenderWindow()->getStatistics();
+        m_cur_fps->setCaptionWithReplacing(_L("Current FPS: ") + TOUTFSTRING(stats.lastFPS));
+        m_avg_fps->setCaptionWithReplacing(_L("Average FPS: ") + TOUTFSTRING(stats.avgFPS));
+        m_worst_fps->setCaptionWithReplacing(_L("Worst FPS: ") + TOUTFSTRING(stats.worstFPS));
+        m_best_fps->setCaptionWithReplacing(_L("Best FPS: ") + TOUTFSTRING(stats.bestFPS));
+        m_triangle_count->setCaptionWithReplacing(_L("Triangle count: ") + TOUTFSTRING(stats.triangleCount));
+        m_batch_count->setCaptionWithReplacing(_L("Batch count: ") + TOUTFSTRING(stats.batchCount));
+    }
+    else
+        m_fpscounter_box->setVisible(false);
 
-		truckstats = truckstats + MainThemeColor + "Beam count: " + WhiteColor + TOUTFSTRING(beamCount) + "\n";
-		truckstats = truckstats + MainThemeColor + "Broken Beams count: " + WhiteColor + TOUTFSTRING(beambroken) + U(" (") + TOUTFSTRING(Round((float)beambroken / (float)beamCount, 2) * 100.0f) + U("%)") + "\n";
-		truckstats = truckstats + MainThemeColor + "Deformed Beams count: " + WhiteColor + TOUTFSTRING(beamdeformed) + U(" (") + TOUTFSTRING(Round((float)beamdeformed / (float)beamCount, 2) * 100.0f) + U("%)") + "\n";
-		truckstats = truckstats + MainThemeColor + "Average Deformation: " + WhiteColor + TOUTFSTRING(Round((float)average_deformation / (float)beamCount, 4) * 100.0f) + "\n";
+    if (m_actor_info_visible && actor != nullptr)
+    {
+        if (!m_truckinfo_box->getVisible())
+            m_truckinfo_box->setVisible(true);
 
-		//Taken from TruckHUD.cpp ..
-		wchar_t beamstressstr[256];
-		swprintf(beamstressstr, 256, L"%+08.0f", 1 - (float)beamstress / (float)beamCount);
-		truckstats = truckstats + MainThemeColor + "Average Stress: " + WhiteColor + Ogre::UTFString(beamstressstr) + "\n";
+        m_truck_name->setMaxTextLength(28);
+        m_truck_name->setCaptionWithReplacing(actor->GetActorDesignName());
+        m_actor_stats_str = "\n"; //always reset on each frame + space
 
-		truckstats = truckstats + "\n"; //Some space
+        //taken from TruckHUD.cpp (now removed), TODO: needs cleanup
+        beam_t* beam = actor->ar_beams;
+        float average_deformation = 0.0f;
+        float beamstress = 0.0f;
+        float current_deformation = 0.0f;
+        float mass = actor->getTotalMass();
+        int beambroken = 0;
+        int beamdeformed = 0;
 
-		int ncount = truck->getNodeCount();
-		int wcount = truck->getWheelNodeCount();
-		wchar_t nodecountstr[256];
-		swprintf(nodecountstr, 256, L"%d (wheels: %d)", ncount, wcount);
-		truckstats = truckstats + MainThemeColor + "Node count: " + WhiteColor + Ogre::UTFString(nodecountstr) + "\n";
+        for (int i = 0; i < actor->ar_num_beams; i++ , beam++)
+        {
+            if (beam->bm_broken != 0)
+            {
+                beambroken++;
+            }
+            beamstress += beam->stress;
+            current_deformation = fabs(beam->L - beam->refL);
+            if (fabs(current_deformation) > 0.0001f && beam->bm_type != BEAM_HYDRO && beam->bm_type != BEAM_INVISIBLE_HYDRO)
+            {
+                beamdeformed++;
+            }
+            average_deformation += current_deformation;
+        }
 
-		wchar_t truckmassstr[256];
-		Ogre::UTFString massstr;
-		swprintf(truckmassstr, 256, L"%ls %8.2f kg (%.2f tons)", massstr.asWStr_c_str(), mass, mass / 1000.0f);
-		truckstats = truckstats + MainThemeColor + "Total mass: " + WhiteColor + Ogre::UTFString(truckmassstr) + "\n";
+        float health = ((float)beambroken / (float)actor->ar_num_beams) * 10.0f + ((float)beamdeformed / (float)actor->ar_num_beams);
+        if (health < 1.0f)
+        {
+            m_actor_stats_str = m_actor_stats_str + MainThemeColor + _L("Vehicle health: ") + WhiteColor + TOUTFSTRING(Round((1.0f - health) * 100.0f, 2)) + U("%") + "\n";
+        }
+        else if (health >= 1.0f)
+        {
+            //When this condition is true, it means that health is at 0% which means 100% of destruction.
+            m_actor_stats_str = m_actor_stats_str + MainThemeColor + _L("Vehicle destruction: ") + WhiteColor + U("100%") + "\n";
+        }
 
-		truckstats = truckstats + "\n"; //Some space
+        m_actor_stats_str = m_actor_stats_str + MainThemeColor + _L("Beam count: ") + WhiteColor + TOUTFSTRING(actor->ar_num_beams) + "\n";
+        m_actor_stats_str = m_actor_stats_str + MainThemeColor + _L("Broken beams count: ") + WhiteColor + TOUTFSTRING(beambroken) + U(" (") + TOUTFSTRING(Round((float)beambroken / (float)actor->ar_num_beams, 2) * 100.0f) + U("%)") + "\n";
+        m_actor_stats_str = m_actor_stats_str + MainThemeColor + _L("Deformed beams count: ") + WhiteColor + TOUTFSTRING(beamdeformed) + U(" (") + TOUTFSTRING(Round((float)beamdeformed / (float)actor->ar_num_beams, 2) * 100.0f) + U("%)") + "\n";
+        m_actor_stats_str = m_actor_stats_str + MainThemeColor + _L("Average deformation: ") + WhiteColor + TOUTFSTRING(Round((float)average_deformation / (float)actor->ar_num_beams, 4) * 100.0f) + "\n";
 
-		if (truck->driveable == TRUCK && truck->engine)
-		{
-			if (truck->engine->getRPM() > truck->engine->getMaxRPM())
-				truckstats = truckstats + MainThemeColor + "Engine RPM: " + RedColor + TOUTFSTRING(Round(truck->engine->getRPM())) + U(" / ") + TOUTFSTRING(Round(truck->engine->getMaxRPM())) + "\n";
-			else
-				truckstats = truckstats + MainThemeColor + "Engine RPM: " + WhiteColor + TOUTFSTRING(Round(truck->engine->getRPM())) + U(" / ") + TOUTFSTRING(Round(truck->engine->getMaxRPM())) + "\n";
+        //Taken from TruckHUD.cpp ..
+        wchar_t beamstressstr[256];
+        swprintf(beamstressstr, 256, L"%+08.0f", 1 - (float)beamstress / (float)actor->ar_num_beams);
+        m_actor_stats_str = m_actor_stats_str + MainThemeColor + _L("Average stress: ") + WhiteColor + Ogre::UTFString(beamstressstr) + "\n";
 
-			float currentKw = (((truck->engine->getRPM() * truck->engine->getEngineTorque() *(3.14159265358979323846 /* pi.. */ / 30)) / 1000));
+        m_actor_stats_str = m_actor_stats_str + "\n"; //Some space
 
-			truckstats = truckstats + MainThemeColor + "Current Power: " + WhiteColor + TOUTFSTRING(Round(currentKw *1.34102209)) + U(" hp / ") + TOUTFSTRING(Round(currentKw)) + U(" Kw") + "\n";
+        int wcount = actor->getWheelNodeCount();
+        wchar_t nodecountstr[256];
+        swprintf(nodecountstr, 256, L"%d (wheels: %d)", actor->ar_num_nodes, wcount);
+        m_actor_stats_str = m_actor_stats_str + MainThemeColor + _L("Node count: ") + WhiteColor + Ogre::UTFString(nodecountstr) + "\n";
 
-			float velocityKMH = truck->WheelSpeed* 3.6f;
-			float velocityMPH = truck->WheelSpeed * 2.23693629f;
-			float carSpeedKPH = truck->nodes[0].Velocity.length() * 3.6f;
-			float carSpeedMPH = truck->nodes[0].Velocity.length() * 2.23693629f;
+        wchar_t truckmassstr[256];
+        Ogre::UTFString massstr;
+        swprintf(truckmassstr, 256, L"%ls %8.2f kg (%.2f tons)", massstr.asWStr_c_str(), mass, mass / 1000.0f);
+        m_actor_stats_str = m_actor_stats_str + MainThemeColor + _L("Total mass: ") + WhiteColor + Ogre::UTFString(truckmassstr) + "\n";
 
-			// apply a deadzone ==> no flickering +/-
-			if (fabs(truck->WheelSpeed) < 1.0f)
-			{
-				velocityKMH = velocityMPH = 0.0f;
-			}
-			if (fabs(truck->nodes[0].Velocity.length()) < 1.0f)
-			{
-				carSpeedKPH = carSpeedMPH = 0.0f;
-			}
+        m_actor_stats_str = m_actor_stats_str + "\n"; //Some space
 
-			//Some kind of wheel skidding detection? lol
-			if (Round(velocityKMH, 0.1) > Round(carSpeedKPH, 0.1) + 2)
-				truckstats = truckstats + MainThemeColor + "Wheel speed: " + RedColor + TOUTFSTRING(Round(velocityKMH)) + U(" km/h (") + TOUTFSTRING(Round(velocityMPH)) + U(" mph)") + "\n";
-			else if (Round(velocityKMH, 0.1) < Round(carSpeedKPH, 0.1) - 2)
-				truckstats = truckstats + MainThemeColor + "Wheel speed: " + BlueColor + TOUTFSTRING(Round(velocityKMH)) + U(" km/h (") + TOUTFSTRING(Round(velocityMPH)) + U(" mph)") + "\n";
-			else
-				truckstats = truckstats + MainThemeColor + "Wheel speed: " + WhiteColor + TOUTFSTRING(Round(velocityKMH)) + U(" km/h (") + TOUTFSTRING(Round(velocityMPH)) + U(" mph)") + "\n";
+        if (actor->ar_driveable == TRUCK && actor->ar_engine)
+        {
+            if (actor->ar_engine->GetEngineRpm() > actor->ar_engine->getMaxRPM())
+                m_actor_stats_str = m_actor_stats_str + MainThemeColor + _L("Engine RPM: ") + RedColor + TOUTFSTRING(Round(actor->ar_engine->GetEngineRpm())) + U(" / ") + TOUTFSTRING(Round(actor->ar_engine->getMaxRPM())) + "\n";
+            else
+                m_actor_stats_str = m_actor_stats_str + MainThemeColor + _L("Engine RPM: ") + WhiteColor + TOUTFSTRING(Round(actor->ar_engine->GetEngineRpm())) + U(" / ") + TOUTFSTRING(Round(actor->ar_engine->getMaxRPM())) + "\n";
 
-			truckstats = truckstats + MainThemeColor + "Car speed: " + WhiteColor + TOUTFSTRING(Round(carSpeedKPH)) + U(" km/h (") + TOUTFSTRING(Round(carSpeedMPH)) + U(" mph)") + "\n";
-		}
-		else 
-		{
-			float speedKN = truck->nodes[0].Velocity.length() * 1.94384449f;
-			truckstats = truckstats + MainThemeColor + "Current Speed: " + WhiteColor + TOUTFSTRING(Round(speedKN)) + U(" kn (") + TOUTFSTRING(Round(speedKN * 1.852)) + U(" km/h) (") + TOUTFSTRING(Round(speedKN * 1.151)) + U(" mph)") + "\n";
-			float altitude = truck->nodes[0].AbsPosition.y / 30.48 * 100;
+            float currentKw = (((actor->ar_engine->GetEngineRpm() * (actor->ar_engine->getEngineTorque() + ((actor->ar_engine->GetTurboPsi() * 6.8) * actor->ar_engine->getEngineTorque()) / 100) * (3.14159265358979323846 /* pi.. */ / 30)) / 1000));
 
-			truckstats = truckstats + MainThemeColor + "Altitude: " + WhiteColor + TOUTFSTRING(Round(altitude)) + U(" feet (") + TOUTFSTRING(Round(altitude * 0.30480)) + U(" meters)") + "\n";
+            m_actor_stats_str = m_actor_stats_str + MainThemeColor + _L("Current power: ") + WhiteColor + TOUTFSTRING(Round(currentKw *1.34102209)) + U(" hp / ") + TOUTFSTRING(Round(currentKw)) + U(" Kw") + "\n";
 
-			if (truck->driveable == AIRPLANE)
-			{
-				for (int i = 0; i < 8; i++)
-				{
-					if (truck->aeroengines[i] && truck->aeroengines[i]->getType() == AeroEngine::AEROENGINE_TYPE_TURBOJET)
-						truckstats = truckstats + MainThemeColor + "Engine " + TOUTFSTRING(i + 1 /*not to start with 0, players wont like it i guess*/) + " : " + WhiteColor + TOUTFSTRING(Round(truck->aeroengines[i]->getRPM())) + "%" + "\n";
-					else if (truck->aeroengines[i] && truck->aeroengines[i]->getType() == AeroEngine::AEROENGINE_TYPE_TURBOPROP)
-						truckstats = truckstats + MainThemeColor + "Engine " + TOUTFSTRING(i + 1 /*not to start with 0, players wont like it i guess*/) + " : " + WhiteColor + TOUTFSTRING(Round(truck->aeroengines[i]->getRPM())) + " RPM" + "\n";
-				}
-			}
-			else if(truck->driveable == BOAT)
-			{
-				for (int i = 0; i < 8; i++)
-				{
-					if (truck->screwprops[i])
-						truckstats = truckstats + MainThemeColor + "Engine " + TOUTFSTRING(i + 1 /*not to start with 0, players wont like it i guess*/) + " : " + WhiteColor + TOUTFSTRING(Round(truck->screwprops[i]->getThrottle() *100 )) + "%" + "\n";
-				}
-			}
-				
-		}
+            m_actor_stats_str = m_actor_stats_str + MainThemeColor + _L("Current gear: ") + WhiteColor + TOUTFSTRING(Round(actor->ar_engine->GetGear())) + "\n";
 
-		/*
-		truckstats = truckstats + MainThemeColor + "maxG: " + WhiteColor + Ogre::UTFString(geesstr) + "\n";
-		*/
+            float velocityKMH = actor->ar_wheel_speed * 3.6f;
+            float velocityMPH = actor->ar_wheel_speed * 2.23693629f;
+            float carSpeedKPH = actor->ar_nodes[0].Velocity.length() * 3.6f;
+            float carSpeedMPH = actor->ar_nodes[0].Velocity.length() * 2.23693629f;
 
-		//Is this really usefull? people really use it?
-		truckstats = truckstats + "\n"; //Some space
+            // apply a deadzone ==> no flickering +/-
+            if (fabs(actor->ar_wheel_speed) < 1.0f)
+            {
+                velocityKMH = velocityMPH = 0.0f;
+            }
+            if (fabs(actor->ar_nodes[0].Velocity.length()) < 1.0f)
+            {
+                carSpeedKPH = carSpeedMPH = 0.0f;
+            }
 
-		wchar_t geesstr[256];
-		Ogre::Vector3 gees = truck->getGForces();
-		// apply deadzones ==> no flickering +/-
-		if (fabs(gees.y) < 0.01) gees.y = 0.0f;
-		if (fabs(gees.z) < 0.01) gees.z = 0.0f;
-		Ogre::UTFString tmp = _L("Vertical: %1.2fg | Saggital: %1.2fg | Lateral: %1.2fg");
-		swprintf(geesstr, 256, tmp.asWStr_c_str(), gees.x, gees.y, gees.z);
-		truckstats = truckstats + MainThemeColor + "Gees: " + WhiteColor + Ogre::UTFString(geesstr) + "\n";
+            Ogre::UTFString wsmsg = _L("Wheel speed: ");
+            //Some kind of wheel skidding detection? lol
+            if (Round(velocityKMH, 0.1) > Round(carSpeedKPH, 0.1) + 2)
+                m_actor_stats_str = m_actor_stats_str + MainThemeColor + wsmsg + RedColor + TOUTFSTRING(Round(velocityKMH)) + U(" km/h (") + TOUTFSTRING(Round(velocityMPH)) + U(" mph)") + "\n";
+            else if (Round(velocityKMH, 0.1) < Round(carSpeedKPH, 0.1) - 2)
+                m_actor_stats_str = m_actor_stats_str + MainThemeColor + wsmsg + BlueColor + TOUTFSTRING(Round(velocityKMH)) + U(" km/h (") + TOUTFSTRING(Round(velocityMPH)) + U(" mph)") + "\n";
+            else
+                m_actor_stats_str = m_actor_stats_str + MainThemeColor + wsmsg + WhiteColor + TOUTFSTRING(Round(velocityKMH)) + U(" km/h (") + TOUTFSTRING(Round(velocityMPH)) + U(" mph)") + "\n";
 
-		if (truck->driveable == TRUCK || truck->driveable == AIRPLANE || truck->driveable == BOAT)
-		{
-			if (gees.x > maxPosVerG[truck->driveable])
-				maxPosVerG[truck->driveable] = gees.x;
-			if (gees.x < maxNegVerG[truck->driveable])
-				maxNegVerG[truck->driveable] = gees.x;
+            m_actor_stats_str = m_actor_stats_str + MainThemeColor + _L("Vehicle speed: ") + WhiteColor + TOUTFSTRING(Round(carSpeedKPH)) + U(" km/h (") + TOUTFSTRING(Round(carSpeedMPH)) + U(" mph)") + "\n";
+        }
+        else
+        {
+            float speedKN = actor->ar_nodes[0].Velocity.length() * 1.94384449f;
+            m_actor_stats_str = m_actor_stats_str + MainThemeColor + _L("Current speed: ") + WhiteColor + TOUTFSTRING(Round(speedKN)) + U(" kn (") + TOUTFSTRING(Round(speedKN * 1.852)) + U(" km/h) (") + TOUTFSTRING(Round(speedKN * 1.151)) + U(" mph)") + "\n";
 
-			if (gees.y > maxPosSagG[truck->driveable])
-				maxPosSagG[truck->driveable] = gees.y;
-			if (gees.y < maxNegSagG[truck->driveable])
-				maxNegSagG[truck->driveable] = gees.y;
+            Ogre::UTFString engmsg = _L("Engine ");
+            if (actor->ar_driveable == AIRPLANE)
+            {
+                float altitude = actor->ar_nodes[0].AbsPosition.y / 30.48 * 100;
+                m_actor_stats_str = m_actor_stats_str + MainThemeColor + _L("Altitude: ") + WhiteColor + TOUTFSTRING(Round(altitude)) + U(" feet (") + TOUTFSTRING(Round(altitude * 0.30480)) + U(" meters)") + "\n";
+                for (int i = 0; i < 8; i++)
+                {
+                    if (actor->ar_aeroengines[i] && actor->ar_aeroengines[i]->getType() == AeroEngine::AEROENGINE_TYPE_TURBOJET)
+                        m_actor_stats_str = m_actor_stats_str + MainThemeColor + engmsg + TOUTFSTRING(i + 1 /*not to start with 0, players wont like it i guess*/) + " : " + WhiteColor + TOUTFSTRING(Round(actor->ar_aeroengines[i]->getRPM())) + "%" + "\n";
+                    else if (actor->ar_aeroengines[i] && actor->ar_aeroengines[i]->getType() == AeroEngine::AEROENGINE_TYPE_TURBOPROP)
+                        m_actor_stats_str = m_actor_stats_str + MainThemeColor + engmsg + TOUTFSTRING(i + 1 /*not to start with 0, players wont like it i guess*/) + " : " + WhiteColor + TOUTFSTRING(Round(actor->ar_aeroengines[i]->getRPM())) + " RPM" + "\n";
+                }
+            }
+            else if (actor->ar_driveable == BOAT)
+            {
+                for (int i = 0; i < 8; i++)
+                {
+                    if (actor->ar_screwprops[i])
+                        m_actor_stats_str = m_actor_stats_str + MainThemeColor + engmsg + TOUTFSTRING(i + 1 /*not to start with 0, players wont like it i guess*/) + " : " + WhiteColor + TOUTFSTRING(Round(actor->ar_screwprops[i]->getThrottle() *100 )) + "%" + "\n";
+                }
+            }
+        }
 
-			if (gees.z > maxPosLatG[truck->driveable])
-				maxPosLatG[truck->driveable] = gees.z;
-			if (gees.z < maxNegLatG[truck->driveable])
-				maxNegLatG[truck->driveable] = gees.z;
+        //Is this really usefull? people really use it?
+        m_actor_stats_str = m_actor_stats_str + "\n"; //Some space
 
-			tmp = _L("V %1.2fg %1.2fg // S %1.2fg %1.2fg // L %1.2fg %1.2fg");
-			swprintf(geesstr, 256, tmp.asWStr_c_str(),
-				maxPosVerG[truck->driveable],
-				maxNegVerG[truck->driveable],
-				maxPosSagG[truck->driveable],
-				maxNegSagG[truck->driveable],
-				maxPosLatG[truck->driveable],
-				maxNegLatG[truck->driveable]
-				);
-			truckstats = truckstats + MainThemeColor + "maxG: " + WhiteColor + Ogre::UTFString(geesstr) + "\n";
-		}
+        wchar_t geesstr[256];
+        Ogre::Vector3 gees = actor->getGForces();
+        // apply deadzones ==> no flickering +/-
+        if (fabs(gees.y) < 0.01)
+            gees.y = 0.0f;
+        if (fabs(gees.z) < 0.01)
+            gees.z = 0.0f;
+        Ogre::UTFString tmp = _L("Vertical: % 1.2fg\nSagittal: % 1.2fg\nLateral:  % 1.2fg");
+        swprintf(geesstr, 256, tmp.asWStr_c_str(), gees.x, gees.y, gees.z);
+        m_actor_stats_str = m_actor_stats_str + MainThemeColor + _L("G-Forces:\n") + WhiteColor + Ogre::UTFString(geesstr) + "\n";
 
-		m_truck_stats->setCaptionWithReplacing(truckstats);
-	}
-	else 
-		m_truckinfo_box->setVisible(false);
+        if (actor->ar_driveable == TRUCK || actor->ar_driveable == AIRPLANE || actor->ar_driveable == BOAT)
+        {
+            if (gees.x > maxPosVerG[actor->ar_driveable])
+                maxPosVerG[actor->ar_driveable] = gees.x;
+            if (gees.x < maxNegVerG[actor->ar_driveable])
+                maxNegVerG[actor->ar_driveable] = gees.x;
 
+            if (gees.y > maxPosSagG[actor->ar_driveable])
+                maxPosSagG[actor->ar_driveable] = gees.y;
+            if (gees.y < maxNegSagG[actor->ar_driveable])
+                maxNegSagG[actor->ar_driveable] = gees.y;
+
+            if (gees.z > maxPosLatG[actor->ar_driveable])
+                maxPosLatG[actor->ar_driveable] = gees.z;
+            if (gees.z < maxNegLatG[actor->ar_driveable])
+                maxNegLatG[actor->ar_driveable] = gees.z;
+
+            tmp = _L("Vertical: % 1.2fg % 1.2fg\nSagittal: % 1.2fg % 1.2fg\nLateral:  % 1.2fg % 1.2fg");
+            swprintf(geesstr, 256, tmp.asWStr_c_str(),
+                maxPosVerG[actor->ar_driveable],
+                maxNegVerG[actor->ar_driveable],
+                maxPosSagG[actor->ar_driveable],
+                maxNegSagG[actor->ar_driveable],
+                maxPosLatG[actor->ar_driveable],
+                maxNegLatG[actor->ar_driveable]
+            );
+            m_actor_stats_str = m_actor_stats_str + MainThemeColor + _L("G-Forces: Maximum - Minimum:\n") + WhiteColor + Ogre::UTFString(geesstr) + "\n";
+        }
+
+        m_truck_stats->setCaptionWithReplacing(m_actor_stats_str);
+    }
+    else
+        m_truckinfo_box->setVisible(false);
 }

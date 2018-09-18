@@ -1,31 +1,27 @@
 /*
-This source file is part of Rigs of Rods
-Copyright 2009 Lefteris Stamatogiannakis
+    This source file is part of Rigs of Rods
+    Copyright 2009 Lefteris Stamatogiannakis
 
-For more information, see http://www.rigsofrods.com/
+    For more information, see http://www.rigsofrods.org/
 
-Rigs of Rods is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License version 3, as
-published by the Free Software Foundation.
+    Rigs of Rods is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License version 3, as
+    published by the Free Software Foundation.
 
-Rigs of Rods is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
+    Rigs of Rods is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+    GNU General Public License for more details.
 
-You should have received a copy of the GNU General Public License
-along with Rigs of Rods.  If not, see <http://www.gnu.org/licenses/>.
+    You should have received a copy of the GNU General Public License
+    along with Rigs of Rods. If not, see <http://www.gnu.org/licenses/>.
 */
-/*
- * File:   ApproxMath.h
- * Author: estama
- *
- * Created on April 6, 2009, 2:57 AM
- */
+
+/// @file
+/// @author estama
+/// @date   April 6, 2009, 2:57 AM
 
 #pragma once
-#ifndef __APPROXMATH_H_
-#define	__APPROXMATH_H_
 
 #include "RoRPrerequisites.h"
 
@@ -69,16 +65,16 @@ inline float frand_11()
 
 // Calculates approximate e^x.
 // Use it in code not requiring precision
-inline float approx_exp (const float x)
+inline float approx_exp(const float x)
 {
-	if (x < -15)
-		return 0.f ;
-	else if (x > 88)
-		return 1e38f ;
-	else {
-		int i=12102203*x+1064652319;
-		return *(float *)&i;
-	}
+    if (x < -15)
+        return 0.f ;
+    else if (x > 88)
+        return 1e38f ;
+    else {
+        int i=12102203*x+1064652319;
+        return *(float *)&i;
+    }
 }
 
 // Calculates approximate 2^x
@@ -138,33 +134,32 @@ inline float fast_invSqrt(const float v)
 // It calculates a fast and accurate square_root(x)
 inline float fast_sqrt(const float x)
 {
-  return x * fast_invSqrt(x);
+    return x * fast_invSqrt(x);
 }
 
 inline float sign(const float x)
 {
-	return (x > 0.0f) ? 1.0f : (x < 0.0f) ? -1.0f : 0.0f;
+    return (x > 0.0f) ? 1.0f : (x < 0.0f) ? -1.0f : 0.0f;
 }
 
 // Ogre3 specific helpers
 inline Ogre::Vector3 approx_normalise(Ogre::Vector3 v)
 {
-	return v*approx_invSqrt(v.squaredLength());
+    return v*approx_invSqrt(v.squaredLength());
 }
 
 inline Ogre::Vector3 fast_normalise(Ogre::Vector3 v)
 {
-	return v*fast_invSqrt(v.squaredLength());
+    return v*fast_invSqrt(v.squaredLength());
 }
 
 inline float approx_length(Ogre::Vector3 v)
 {
-	return approx_sqrt(v.squaredLength());
+    return approx_sqrt(v.squaredLength());
 }
 
 inline float fast_length(Ogre::Vector3 v)
 {
-	return fast_sqrt(v.squaredLength());
+    return fast_sqrt(v.squaredLength());
 }
 
-#endif // __APPROXMATH_H_

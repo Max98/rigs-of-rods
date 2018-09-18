@@ -1,157 +1,171 @@
 /*
-	This source file is part of Rigs of Rods
-	Copyright 2005-2012 Pierre-Michel Ricordel
-	Copyright 2007-2012 Thomas Fischer
-	Copyright 2013-2014 Petr Ohlidal
+    This source file is part of Rigs of Rods
+    Copyright 2005-2012 Pierre-Michel Ricordel
+    Copyright 2007-2012 Thomas Fischer
+    Copyright 2013-2017 Petr Ohlidal & contributors
 
-	For more information, see http://www.rigsofrods.com/
+    For more information, see http://www.rigsofrods.org/
 
-	Rigs of Rods is free software: you can redistribute it and/or modify
-	it under the terms of the GNU General Public License version 3, as
-	published by the Free Software Foundation.
+    Rigs of Rods is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License version 3, as
+    published by the Free Software Foundation.
 
-	Rigs of Rods is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY; without even the implied warranty of
-	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-	GNU General Public License for more details.
+    Rigs of Rods is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+    GNU General Public License for more details.
 
-	You should have received a copy of the GNU General Public License
-	along with Rigs of Rods. If not, see <http://www.gnu.org/licenses/>.
+    You should have received a copy of the GNU General Public License
+    along with Rigs of Rods. If not, see <http://www.gnu.org/licenses/>.
 */
 
-/** 
-	@file   GUIManager.h
-	@author based on the basemanager code from mygui common
-*/
+/// @file
+/// @author based on the basemanager code from mygui common
 
 #pragma once
 
 #include "GUIInputManager.h"
-#include "GuiManagerInterface.h"
+#include "OgreImGui.h"
 #include "RoRPrerequisites.h"
 
-#include <MyGUI.h>
-#include <OgreFrameListener.h>
 #include <OgreWindowEventUtilities.h>
+#include <OgreFrameListener.h>
+#include <MyGUI_UString.h>
 
-//Include managed guis headers
-#include "GUI_RigSpawnerReportWindow.h"
-#include "GUI_GameMainMenu.h"
-#include "GUI_GameAbout.h"
-#include "GUI_GameSettings.h"
-#include "GUI_DebugOptions.h"
-#include "GUI_SimUtils.h"
-#include "GUI_MessageBox.h"
-#include "GUI_MultiplayerSelector.h"
-#include "GUI_MainSelector.h"
-#include "GUI_GamePauseMenu.h"
-#include "GUI_GameChatBox.h"
-#include "GUI_VehicleDescription.h"
-
-namespace RoR
-{
+namespace RoR {
 
 class GUIManager :
-	  public GUIInputManager
-	, public Ogre::FrameListener
-	, public Ogre::WindowEventListener
-	, public ZeroedMemoryAllocator
-	, public GuiManagerInterface
+    public GUIInputManager
+    , public Ogre::FrameListener
+    , public Ogre::WindowEventListener
+    , public ZeroedMemoryAllocator
 {
-
-	friend class RoR::Application; // Manages lifecycle of this class
-
 public:
 
-	void destroy();
+    struct GuiTheme
+    {
+        GuiTheme();
 
-	static Ogre::String getRandomWallpaperImage();
+        ImVec4 in_progress_text_color;
+        ImVec4 no_entries_text_color;
+        ImVec4 error_text_color;
+        ImVec4 selected_entry_text_color;
+    };
 
-	void windowResized(Ogre::RenderWindow* rw);
+    // NOTE: RoR's mouse cursor management is a mess - cursor is hidden/revealed ad-hoc in the code (originally by calling `MyGUI::PointerManager::setVisible()`); this enum+API cleans it up a bit ~ only_a_ptr, 09/2017
+    enum class MouseCursorVisibility
+    {
+        VISIBLE,   ///< Visible, will be auto-hidden if not moving for a while.
+        HIDDEN,    ///< Hidden as inactive, will re-appear the moment user moves mouse.
+        SUPRESSED, ///< Hidden manually, will not re-appear until explicitly set VISIBLE.
+    };
 
-	/** Set scene manager where GUI will be rendered */
-	void SetSceneManager(Ogre::SceneManager* scene_manager);
+    GUIManager();
+    ~GUIManager();
 
-	// ------------ Interface functions ------------ //
-	//GUI windows manager
-	void ShowMainMenu(bool isVisible);
-	void ShowSettingGui(bool isVisible);
-	void ShowAboutGUI(bool isVisible);
-	void ShowDebugOptionsGUI(bool isVisible);
+    // GUI SetVisible*()
+    void SetVisible_GameMainMenu        (bool visible);
+    void SetVisible_GameAbout           (bool visible);
+    void SetVisible_GamePauseMenu       (bool visible);
+    void SetVisible_GameSettings        (bool visible);
+    void SetVisible_DebugOptions        (bool visible);
+    void SetVisible_MultiplayerSelector (bool visible);
+    void SetVisible_ChatBox             (bool visible);
+    void SetVisible_SpawnerReport       (bool visible);
+    void SetVisible_VehicleDescription  (bool visible);
+    void SetVisible_MpClientList        (bool visible);
+    void SetVisible_FrictionSettings    (bool visible);
+    void SetVisible_TextureToolWindow   (bool visible);
+    void SetVisible_TeleportWindow      (bool visible);
+    void SetVisible_LoadingWindow       (bool visible);
+    void SetVisible_TopMenubar          (bool visible);
+    void SetVisible_Console             (bool visible);
 
-	void ToggleFPSBox();
-	void ToggleTruckInfoBox();
+    // GUI IsVisible*()
+    bool IsVisible_GameMainMenu         ();
+    bool IsVisible_GameAbout            ();
+    bool IsVisible_GamePauseMenu        ();
+    bool IsVisible_GameSettings         ();
+    bool IsVisible_DebugOptions         ();
+    bool IsVisible_MessageBox           ();
+    bool IsVisible_MultiplayerSelector  ();
+    bool IsVisible_MpClientList         ();
+    bool IsVisible_MainSelector         ();
+    bool IsVisible_ChatBox              ();
+    bool IsVisible_SpawnerReport        ();
+    bool IsVisible_VehicleDescription   ();
+    bool IsVisible_FrictionSettings     ();
+    bool IsVisible_TextureToolWindow    ();
+    bool IsVisible_TeleportWindow       ();
+    bool IsVisible_LoadingWindow        ();
+    bool IsVisible_TopMenubar           ();
+    bool IsVisible_Console              ();
 
-	void UpdateSimUtils(float dt, Beam *truck);
-	void framestep(float dt);
+    // GUI GetInstance*()
+    Console* GetConsole();
+    GUI::MainSelector* GetMainSelector();
+    GUI::LoadingWindow* GetLoadingWindow();
+    GUI::MpClientList* GetMpClientList();
+    GUI::MultiplayerSelector* GetMpSelector();
+    GUI::FrictionSettings* GetFrictionSettings();
+    GUI::SimUtils* GetSimUtils();
+    GUI::TopMenubar* GetTopMenubar();
+    GUI::TeleportWindow* GetTeleport();
 
-	void PushNotification(Ogre::String Title, Ogre::String text);
+    // GUI manipulation
+    void pushMessageChatBox(Ogre::String txt);
+    void ShowMessageBox(Ogre::String mTitle, Ogre::String mText, bool button1, Ogre::String mButton1, bool AllowClose, bool button2, Ogre::String mButton2);
+    void UpdateMessageBox(Ogre::String mTitle, Ogre::String mText, bool button1, Ogre::String mButton1, bool AllowClose, bool button2, Ogre::String mButton2, bool IsVisible);
+    void UnfocusGui();
+    void PushNotification(Ogre::String Title, Ogre::UTFString text);
+    void HideNotification();
+    void CenterSpawnerReportWindow();
+    void AdjustPauseMenuPosition();
+    void AdjustMainMenuPosition();
 
-	void ShowMessageBox(Ogre::String mTitle, Ogre::String mText, bool button1, Ogre::String mButton1, bool AllowClose, bool button2, Ogre::String mButton2);
-	void UpdateMessageBox(Ogre::String mTitle, Ogre::String mText, bool button1, Ogre::String mButton1, bool AllowClose, bool button2, Ogre::String mButton2, bool IsVisible);
-	int getMessageBoxResult(); //TODO
+    void UpdateSimUtils(float dt, Actor* truck);
+    void FrameStepGui(float dt);
+    void NewImGuiFrame(float dt);
+    void DrawMainMenuGui();
 
-	void ShowMultiPlayerSelector(bool isVisible);
+    int getMessageBoxResult(); //TODO
+    void DrawMpConnectingStatusBox();
+    void InitMainSelector(RoR::SkinManager* skin_manager);
 
-	void InitMainSelector(RoR::SkinManager* skin_manager);
-	std::shared_ptr<GUI::MainSelector> getMainSelector() { return m_gui_MainSelector; }
+    void hideGUI(bool visible);
 
-	void initSimUtils();
-	void killSimUtils();
+    void destroy();
 
-	void TogglePauseMenu();
+    void windowResized(Ogre::RenderWindow* rw);
 
-	void ShowChatBox();
-	void pushMessageChatBox(Ogre::String txt);
-	void SetNetChat(ChatSystem *c);
+    void SetSceneManagerForGuiRendering(Ogre::SceneManager* scene_manager);
 
-	bool GetPauseMenuVisible();
+    void FrictionSettingsUpdateCollisions();
+    void ShutdownMyGUI();
+    void ReflectGameState();
+    void SetMouseCursorVisibility(MouseCursorVisibility visi);
 
-	void ShowVehicleDescription();
+    virtual void AddRigLoadingReport(std::string const& vehicle_name, std::string const& text, int num_errors, int num_warnings, int num_other);
 
-	virtual void UnfocusGui();
+    static Ogre::String getRandomWallpaperImage();
 
-	virtual void AddRigLoadingReport(std::string const & vehicle_name, std::string const & text, int num_errors, int num_warnings, int num_other);
-	virtual void ShowRigSpawnerReportWindow();
-	virtual void HideRigSpawnerReportWindow();
+    inline OgreImGui& GetImGui() { return m_imgui; }
+    inline GuiTheme&  GetTheme() { return m_theme; }
+
 
 private:
+    void SetupImGui();
 
-	GUIManager();
-	virtual ~GUIManager();
+    virtual bool frameStarted(const Ogre::FrameEvent& _evt);
+    virtual bool frameEnded(const Ogre::FrameEvent& _evt);
+    virtual void windowClosed(Ogre::RenderWindow* rw);
 
-	bool create();
-	void createGui();
-	void destroyGui();
+    void eventRequestTag(const MyGUI::UString& _tag, MyGUI::UString& _result);
 
-	virtual bool frameStarted(const Ogre::FrameEvent& _evt);
-	virtual bool frameEnded(const Ogre::FrameEvent& _evt);
-	virtual void windowClosed(Ogre::RenderWindow* rw);
-
-	void eventRequestTag(const MyGUI::UString& _tag, MyGUI::UString& _result);
-
-	MyGUI::Gui* mGUI;
-	MyGUI::OgrePlatform* mPlatform;
-	Ogre::String mResourceFileName;
-	bool mExit;
-	
-	// ---------- GUI Panels ----------
-	//GUI Windows pointers	
-	std::unique_ptr<GUI::GameMainMenu>      m_gui_GameMainMenu;
-	std::unique_ptr<GUI::GameAbout>			m_gui_GameAbout;
-	std::unique_ptr<GUI::GameSettings>		m_gui_GameSettings;
-	std::unique_ptr<GUI::DebugOptions>		m_gui_DebugOptions;
-	std::unique_ptr<GUI::SimUtils>			m_gui_SimUtils;
-	std::unique_ptr<GUI::gMessageBox>		m_gui_gMessageBox;
-	std::unique_ptr<GUI::MultiplayerSelector>		m_gui_MultiplayerSelector;
-	std::unique_ptr<GUI::GamePauseMenu>		m_gui_GamePauseMenu;
-	std::shared_ptr<GUI::MainSelector>		m_gui_MainSelector;
-	std::shared_ptr<GUI::GameChatBox>		m_gui_ChatBox;
-	std::unique_ptr<GUI::RigSpawnerReportWindow> m_rig_spawner_report_window;
-	std::unique_ptr<GUI::VehicleDescription> m_vehicle_description;
-
-	bool isSimUtilsVisible;
+    GuiManagerImpl*    m_impl;
+    bool               m_renderwindow_closed;
+    OgreImGui          m_imgui;
+    GuiTheme           m_theme;
 };
 
 } // namespace RoR
-

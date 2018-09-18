@@ -1,635 +1,992 @@
 /*
-This source file is part of Rigs of Rods
-Copyright 2005-2012 Pierre-Michel Ricordel
-Copyright 2007-2012 Thomas Fischer
+    This source file is part of Rigs of Rods
+    Copyright 2005-2012 Pierre-Michel Ricordel
+    Copyright 2007-2012 Thomas Fischer
+    Copyright 2013-2017 Petr Ohlidal & contributors
 
-For more information, see http://www.rigsofrods.com/
+    For more information, see http://www.rigsofrods.org/
 
-Rigs of Rods is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License version 3, as
-published by the Free Software Foundation.
+    Rigs of Rods is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License version 3, as
+    published by the Free Software Foundation.
 
-Rigs of Rods is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
+    Rigs of Rods is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+    GNU General Public License for more details.
 
-You should have received a copy of the GNU General Public License
-along with Rigs of Rods.  If not, see <http://www.gnu.org/licenses/>.
+    You should have received a copy of the GNU General Public License
+    along with Rigs of Rods. If not, see <http://www.gnu.org/licenses/>.
 */
-// created by thomas fischer, 4th of January 2009
+
+
+/// @file
+/// @date   4th of January 2009
+/// @author Thomas Fischer
+
 #include "Settings.h"
-
-#if OGRE_PLATFORM == OGRE_PLATFORM_WIN32
-#include <shlobj.h> // for CoCreateGuid and SHGetFolderPathA
-#include <direct.h> // for _chdir
-#endif
-
-#define _L
-
-#include "ErrorUtils.h"
-#include "Ogre.h"
-#include "PlatformUtils.h"
-#include "RoRVersion.h"
-#include "SHA1.h"
 #include "Utils.h"
 
+#include <Ogre.h>
+
+#if OGRE_PLATFORM == OGRE_PLATFORM_WIN32
+#include <direct.h> // for _chdir
+#include <Windows.h>
+#endif
+
+#include "Application.h"
+#include "ErrorUtils.h"
+#include "Language.h"
+#include "PlatformUtils.h"
+
+#include "Utils.h"
+
+// simpleopt by http://code.jellycan.com/simpleopt/
+// license: MIT
+#ifdef _UNICODE
+#    undef _UNICODE // We want narrow-string args.
+#endif
+#include "SimpleOpt.h"
+
+// option identifiers
+enum {
+    OPT_HELP,
+    OPT_MAP,
+    OPT_TRUCK,
+    OPT_SETUP,
+    OPT_WDIR,
+    OPT_VER,
+    OPT_CHECKCACHE,
+    OPT_TRUCKCONFIG,
+    OPT_ENTERTRUCK,
+    OPT_USERPATH,
+    OPT_STATE,
+    OPT_INCLUDEPATH,
+    OPT_NOCACHE,
+    OPT_JOINMPSERVER
+};
+
+// option array
+CSimpleOpt::SOption cmdline_options[] = {
+    { OPT_MAP,            ("-map"),         SO_REQ_SEP },
+    { OPT_MAP,            ("-terrain"),     SO_REQ_SEP },
+    { OPT_TRUCK,          ("-truck"),       SO_REQ_SEP },
+    { OPT_ENTERTRUCK,     ("-enter"),       SO_NONE    },
+    { OPT_WDIR,           ("-wd"),          SO_REQ_SEP },
+    { OPT_SETUP,          ("-setup"),       SO_NONE    },
+    { OPT_TRUCKCONFIG,    ("-actorconfig"), SO_REQ_SEP },
+    { OPT_HELP,           ("--help"),       SO_NONE    },
+    { OPT_HELP,           ("-help"),        SO_NONE    },
+    { OPT_CHECKCACHE,     ("-checkcache"),  SO_NONE    },
+    { OPT_VER,            ("-version"),     SO_NONE    },
+    { OPT_USERPATH,       ("-userpath"),    SO_REQ_SEP },
+    { OPT_STATE,          ("-state"),       SO_REQ_SEP },
+    { OPT_INCLUDEPATH,    ("-includepath"), SO_REQ_SEP },
+    { OPT_NOCACHE,        ("-nocache"),     SO_NONE    },
+    { OPT_JOINMPSERVER,   ("-joinserver"),  SO_REQ_CMB },
+    SO_END_OF_OPTIONS
+};
+
+namespace RoR {
+
+void ShowCommandLineUsage()
+{
+    ErrorUtils::ShowInfo(
+        _L("Command Line Arguments"),
+        _L("--help (this)"                              "\n"
+            "-map <map> (loads map on startup)"         "\n"
+            "-truck <truck> (loads truck on startup)"   "\n"
+            "-setup shows the ogre configurator"        "\n"
+            "-version shows the version information"    "\n"
+            "-enter enters the selected truck"          "\n"
+            "-userpath <path> sets the user directory"  "\n"
+            "For example: RoR.exe -map oahu -truck semi"));
+}
+
+void ShowVersion()
+{
+    ErrorUtils::ShowInfo(_L("Version Information"), getVersionString());
+#ifdef __GNUC__
+    printf(" * built with gcc %d.%d.%d\n", __GNUC__, __GNUC_MINOR__, __GNUC_PATCHLEVEL__);
+#endif //__GNUC__
+}
+
+}
+
 using namespace Ogre;
+using namespace RoR;
 
-bool FileExists(const char *path)
+void Settings::ProcessCommandLine(int argc, char *argv[])
 {
+    CSimpleOpt args(argc, argv, cmdline_options);
+
+    while (args.Next())
+    {
+        if (args.LastError() != SO_SUCCESS)
+        {
+            RoR::App::app_state.SetPending(RoR::AppState::PRINT_HELP_EXIT);
+            return;
+        }
+        else if (args.OptionId() == OPT_HELP)
+        {
+            RoR::App::app_state.SetPending(RoR::AppState::PRINT_HELP_EXIT);
+            return;
+        }
+        else if (args.OptionId() == OPT_VER)
+        {
+            RoR::App::app_state.SetPending(RoR::AppState::PRINT_VERSION_EXIT);
+            return;
+        }
+        else if (args.OptionId() == OPT_TRUCK)
+        {
+            App::diag_preset_vehicle.SetActive(args.OptionArg());
+        }
+        else if (args.OptionId() == OPT_TRUCKCONFIG)
+        {
+            App::diag_preset_veh_config.SetActive(args.OptionArg());
+        }
+        else if (args.OptionId() == OPT_MAP)
+        {
+            App::diag_preset_terrain.SetActive(args.OptionArg());
+        }
+        else if (args.OptionId() == OPT_USERPATH)
+        {
+            SETTINGS.setSetting("userpath", String(args.OptionArg()));
+        }
+        else if (args.OptionId() == OPT_WDIR)
+        {
 #if OGRE_PLATFORM == OGRE_PLATFORM_WIN32
-	DWORD attributes = GetFileAttributesA(path);
-	return (attributes != INVALID_FILE_ATTRIBUTES && ! (attributes & FILE_ATTRIBUTE_DIRECTORY));
-#else
-	struct stat st;
-	return (stat(path, &st) == 0);
+            SetCurrentDirectory(args.OptionArg());
 #endif
-}
+        }
+        else if (args.OptionId() == OPT_STATE)
+        {
+            SETTINGS.setSetting("StartState", args.OptionArg());
+        }
+        else if (args.OptionId() == OPT_NOCACHE)
+        {
+            SETTINGS.setSetting("NOCACHE", "Yes");
+        }
+        else if (args.OptionId() == OPT_INCLUDEPATH)
+        {
+            App::diag_extra_resource_dir.SetActive(args.OptionArg());
+        }
+        else if (args.OptionId() == OPT_CHECKCACHE)
+        {
+            // just regen cache and exit
+            SETTINGS.setSetting("regen-cache-only", "Yes");
+        }
+        else if (args.OptionId() == OPT_ENTERTRUCK)
+        {
+            App::diag_preset_veh_enter.SetActive(true);
+        }
+        else if (args.OptionId() == OPT_SETUP)
+        {
+            SETTINGS.setSetting("USE_OGRE_CONFIG", "Yes");
+        }
+        else if (args.OptionId() == OPT_JOINMPSERVER)
+        {
+            std::string server_args = args.OptionArg();
+            const int colon = server_args.rfind(":");
+            if (colon != std::string::npos)
+            {
+                App::mp_state.SetPending(RoR::MpState::CONNECTED);
 
-bool FolderExists(const char *path)
-{
-#if OGRE_PLATFORM == OGRE_PLATFORM_WIN32
-	DWORD attributes = GetFileAttributesA(path);
-	return (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY));
-#else
-	struct stat st;
-	return (stat(path, &st) == 0);
-#endif
-}
-
-bool FileExists(Ogre::String const & path)
-{
-	return FileExists(path.c_str());
-}
-
-bool FolderExists(Ogre::String const & path)
-{
-	return FolderExists(path.c_str());
-}
-
-Settings::Settings():
-	m_flares_mode(-1),
-	m_gearbox_mode(-1)
-{
-}
-
-Settings::~Settings()
-{
+                std::string host_str;
+                std::string port_str;
+                if (server_args.find("rorserver://") != String::npos) // Windows URI Scheme retuns rorserver://server:port/
+                {
+                    host_str = server_args.substr(12, colon - 12);
+                    port_str = server_args.substr(colon + 1, server_args.length() - colon - 2);
+                }
+                else
+                {
+                    host_str = server_args.substr(0, colon);
+                    port_str = server_args.substr(colon + 1, server_args.length());
+                }
+                App::mp_server_host.SetActive(host_str.c_str());
+                App::mp_server_port.SetActive(Ogre::StringConverter::parseInt(port_str));
+            }
+        }
+    }
 }
 
 String Settings::getSetting(String key, String defaultValue)
 {
-	settings_map_t::iterator it = settings.find(key);
-	if (it == settings.end())
-	{
-		setSetting(key, defaultValue);
-		return defaultValue;
-	}
-	return it->second;
+    settings_map_t::iterator it = settings.find(key);
+    if (it == settings.end())
+    {
+        setSetting(key, defaultValue);
+        return defaultValue;
+    }
+    return it->second;
 }
 
 UTFString Settings::getUTFSetting(UTFString key, UTFString defaultValue)
 {
-	return getSetting(key, defaultValue);
+    return getSetting(key, defaultValue);
 }
 
 int Settings::getIntegerSetting(String key, int defaultValue )
 {
-	settings_map_t::iterator it = settings.find(key);
-	if (it == settings.end())
-	{
-		setSetting(key, TOSTRING(defaultValue));
-		return defaultValue;
-	}
-	return PARSEINT(it->second);
+    settings_map_t::iterator it = settings.find(key);
+    if (it == settings.end())
+    {
+        setSetting(key, TOSTRING(defaultValue));
+        return defaultValue;
+    }
+    return PARSEINT(it->second);
 }
 
 float Settings::getFloatSetting(String key, float defaultValue )
 {
-	settings_map_t::iterator it = settings.find(key);
-	if (it == settings.end())
-	{
-		setSetting(key, TOSTRING(defaultValue));
-		return defaultValue;
-	}
-	return PARSEREAL(it->second);
+    settings_map_t::iterator it = settings.find(key);
+    if (it == settings.end())
+    {
+        setSetting(key, TOSTRING(defaultValue));
+        return defaultValue;
+    }
+    return PARSEREAL(it->second);
 }
 
 bool Settings::getBooleanSetting(String key, bool defaultValue)
 {
-	settings_map_t::iterator it = settings.find(key);
-	if (it == settings.end())
-	{
-		setSetting(key, defaultValue ?"Yes":"No");
-		return defaultValue;
-	}
-	String strValue = it->second;
-	StringUtil::toLowerCase(strValue);
-	return (strValue == "yes");
+    settings_map_t::iterator it = settings.find(key);
+    if (it == settings.end())
+    {
+        setSetting(key, defaultValue ?"Yes":"No");
+        return defaultValue;
+    }
+    String strValue = it->second;
+    StringUtil::toLowerCase(strValue);
+    return (strValue == "yes");
 }
 
 String Settings::getSettingScriptSafe(const String &key)
 {
-	// hide certain settings for scripts
-	if (key == "User Token" || key == "User Token Hash" || key == "Config Root" || key == "Cache Path" || key == "Log Path" || key == "Resources Path" || key == "Program Path")
-		return "permission denied";
+    // hide certain settings for scripts
+    if (key == "User Token" || key == "User Token Hash")
+        return "permission denied";
 
-	return settings[key];
+    return settings[key];
 }
 
 void Settings::setSettingScriptSafe(const String &key, const String &value)
 {
-	// hide certain settings for scripts
-	if (key == "User Token" || key == "User Token Hash" || key == "Config Root" || key == "Cache Path" || key == "Log Path" || key == "Resources Path" || key == "Program Path")
-		return;
+    // hide certain settings for scripts
+    if (key == "User Token" || key == "User Token Hash")
+        return;
 
-	settings[key] = value;
+    settings[key] = value;
 }
 
 void Settings::setSetting(String key, String value)
 {
-	settings[key] = value;
+    settings[key] = value;
 }
 
 void Settings::setUTFSetting(UTFString key, UTFString value)
 {
-	settings[key] = value;
+    settings[key] = value;
 }
 
-void Settings::checkGUID()
+const char* CONF_GFX_SHADOW_TEX     = "Texture shadows";
+const char* CONF_GFX_SHADOW_PSSM    = "Parallel-split Shadow Maps";
+const char* CONF_GFX_SHADOW_NONE    = "No shadows (fastest)";
+
+const char* CONF_EXTCAM_PITCHING    = "Pitching";
+const char* CONF_EXTCAM_STATIC      = "Static";
+const char* CONF_EXTCAM_NONE        = "None";
+
+const char* CONF_TEXFILTER_NONE     = "None (fastest)";
+const char* CONF_TEXFILTER_BILI     = "Bilinear";
+const char* CONF_TEXFILTER_TRILI    = "Trilinear";
+const char* CONF_TEXFILTER_ANISO    = "Anisotropic (best looking)";
+
+const char* CONF_VEGET_NONE         = "None (fastest)";
+const char* CONF_VEGET_20PERC       = "20%";
+const char* CONF_VEGET_50PERC       = "50%";
+const char* CONF_VEGET_FULL         = "Full (best looking, slower)";
+
+const char* CONF_GEARBOX_AUTO       = "Automatic shift";
+const char* CONF_GEARBOX_SEMIAUTO   = "Manual shift - Auto clutch";
+const char* CONF_GEARBOX_MANUAL     = "Fully Manual: sequential shift";
+const char* CONF_GEARBOX_MAN_STICK  = "Fully manual: stick shift";
+const char* CONF_GEARBOX_MAN_RANGES = "Fully Manual: stick shift with ranges";
+
+const char* CONF_FLARES_NONE        = "None (fastest)";
+const char* CONF_FLARES_NO_LIGHT    = "No light sources";
+const char* CONF_FLARES_CURR_HEAD   = "Only current vehicle, main lights";
+const char* CONF_FLARES_ALL_HEADS   = "All vehicles, main lights";
+const char* CONF_FLARES_ALL_LIGHTS  = "All vehicles, all lights";
+
+const char* CONF_WATER_NONE         = "None";
+const char* CONF_WATER_BASIC        = "Basic (fastest)";
+const char* CONF_WATER_REFLECT      = "Reflection";
+const char* CONF_WATER_FULL_FAST    = "Reflection + refraction (speed optimized)";
+const char* CONF_WATER_FULL_HQ      = "Reflection + refraction (quality optimized)";
+const char* CONF_WATER_HYDRAX       = "Hydrax";
+
+const char* CONF_SKY_CAELUM         = "Caelum (best looking, slower)";
+const char* CONF_SKY_SKYX           = "SkyX (best looking, slower)";
+const char* CONF_SKY_SANDSTORM      = "Sandstorm (fastest)";
+
+const char* CONF_INPUT_GRAB_DYNAMIC = "Dynamically";
+const char* CONF_INPUT_GRAB_NONE    = "None";
+const char* CONF_INPUT_GRAB_ALL     = "All";
+
+// ---------------------------- READING CONFIG FILE ------------------------------- //
+
+inline bool CheckIoInputGrabMode(std::string const & key, std::string const & s)
 {
-	if (getSetting("GUID", "").empty())
-		createGUID();
+    if (key != App::io_input_grab_mode.conf_name)
+        return false;
+
+    if (s == CONF_INPUT_GRAB_DYNAMIC) { App::io_input_grab_mode.SetActive(RoR::IoInputGrabMode::DYNAMIC); return true; }
+    if (s == CONF_INPUT_GRAB_NONE   ) { App::io_input_grab_mode.SetActive(RoR::IoInputGrabMode::NONE);    return true; }
+    else                              { App::io_input_grab_mode.SetActive(RoR::IoInputGrabMode::ALL);     return true; }
 }
 
-void Settings::createGUID()
+inline bool CheckShadowTech(std::string const & key, std::string const & s)
 {
-#if OGRE_PLATFORM == OGRE_PLATFORM_WIN32
-	GUID *g = new GUID();
-	CoCreateGuid(g);
+    if (key != App::gfx_shadow_type.conf_name)
+        return false;
 
-	char buf[120];
-	sprintf(buf,"%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x", g->Data1,g->Data2,g->Data3,UINT(g->Data4[0]),UINT(g->Data4[1]),UINT(g->Data4[2]),UINT(g->Data4[3]),UINT(g->Data4[4]),UINT(g->Data4[5]),UINT(g->Data4[6]),UINT(g->Data4[7]));
-	delete g;
-
-	String guid = String(buf);
-
-	// save in settings
-	setSetting("GUID", guid);
-	saveSettings();
-
-#endif //OGRE_PLATFORM
+    if (s == CONF_GFX_SHADOW_TEX)     { App::gfx_shadow_type.SetActive(GfxShadowType::TEXTURE); return true; }
+    if (s == CONF_GFX_SHADOW_PSSM)    { App::gfx_shadow_type.SetActive(GfxShadowType::PSSM   ); return true; }
+    else                              { App::gfx_shadow_type.SetActive(GfxShadowType::NONE   ); return true; }
 }
 
-void Settings::saveSettings()
+inline bool CheckExtcamMode(std::string const & key, std::string const & s)
 {
-	saveSettings(getSetting("Config Root", "")+"RoR.cfg");
+    if (key != App::gfx_extcam_mode.conf_name)
+        return false;
+
+    if (s == CONF_EXTCAM_PITCHING)    { App::gfx_extcam_mode.SetActive(GfxExtCamMode::PITCHING); return true; }
+    if (s == CONF_EXTCAM_STATIC)      { App::gfx_extcam_mode.SetActive(GfxExtCamMode::STATIC  ); return true; }
+    else                              { App::gfx_extcam_mode.SetActive(GfxExtCamMode::NONE    ); return true; }
 }
 
-void Settings::saveSettings(String configFile)
+inline bool CheckTexFiltering(std::string const & key, std::string const & s)
 {
-	std::ofstream f(configFile.c_str());
-	if (!f.is_open()) return;
+    if (key != App::gfx_texture_filter.conf_name)
+        return false;
 
-	// now save the settings to RoR.cfg
-	settings_map_t::iterator it;
-	for (it = settings.begin(); it != settings.end(); it++)
-	{
-		if (it->first == "BinaryHash") continue;
-		f << it->first << "=" << it->second << std::endl;
-	}
-	f.close();
-	/*
-	FILE *fd;
-	Ogre::String rorcfg = configFile;
-	std::map<std::string, std::string>::iterator it;
-
-	LOG("Saving to Config file: " + rorcfg);
-
-	const char * rorcfg_char = rorcfg.c_str();
-	fd = fopen(rorcfg_char, "w");
-	if (!fd)
-	{
-		LOG("Could not write config file");
-		return;
-	}
-	// now save the Settings to RoR.cfg
-	for (it = settings.begin(); it != settings.end(); it++)
-	{
-		fprintf(fd, "%s=%s\n", it->first.c_str(), it->second.c_str());
-	}
-	fclose(fd);*/
+    if (s == CONF_TEXFILTER_NONE)     { App::gfx_texture_filter.SetActive(GfxTexFilter::NONE);        return true; }
+    if (s == CONF_TEXFILTER_BILI)     { App::gfx_texture_filter.SetActive(GfxTexFilter::BILINEAR);    return true; }
+    if (s == CONF_TEXFILTER_TRILI)    { App::gfx_texture_filter.SetActive(GfxTexFilter::TRILINEAR);   return true; }
+    if (s == CONF_TEXFILTER_ANISO)    { App::gfx_texture_filter.SetActive(GfxTexFilter::ANISOTROPIC); return true; }
+    return true;
 }
 
-void Settings::loadSettings(String configFile, bool overwrite)
+inline bool CheckVegetationMode(std::string const & key, std::string const & s)
 {
-	//printf("trying to load configfile: %s...\n", configFile.c_str());
-	ConfigFile cfg;
-	cfg.load(configFile, "=:\t", false);
+    if (key != App::gfx_vegetation_mode.conf_name)
+        return false;
 
-	// load all settings into a map!
-	ConfigFile::SettingsIterator i = cfg.getSettingsIterator();
-	String svalue, sname;
-	while (i.hasMoreElements())
-	{
-		sname = i.peekNextKey();
-		svalue = i.getNext();
-		if (!overwrite && settings[sname] != "") continue;
-		settings[sname] = svalue;
-		//logfile->AddLine(conv("### ") + conv(sname) + conv(" : ") + conv(svalue));logfile->Write();
-	}
-	// add a GUID if not there
-	checkGUID();
-	generateBinaryHash();
-
-#ifndef NOOGRE
-	// generate hash of the token
-	String usertoken = SSETTING("User Token", "");
-	char usertokensha1result[250];
-	memset(usertokensha1result, 0, 250);
-	if (usertoken.size()>0)
-	{
-		RoR::CSHA1 sha1;
-		sha1.UpdateHash((uint8_t *)usertoken.c_str(), (uint32_t)usertoken.size());
-		sha1.Final();
-		sha1.ReportHash(usertokensha1result, RoR::CSHA1::REPORT_HEX_SHORT);
-	}
-
-	setSetting("User Token Hash", String(usertokensha1result));
-#endif // NOOGRE
+    if (s == CONF_VEGET_NONE  )       { App::gfx_vegetation_mode.SetActive(GfxVegetation::NONE);    return true; }
+    if (s == CONF_VEGET_20PERC)       { App::gfx_vegetation_mode.SetActive(GfxVegetation::x20PERC); return true; }
+    if (s == CONF_VEGET_50PERC)       { App::gfx_vegetation_mode.SetActive(GfxVegetation::x50PERC); return true; }
+    if (s == CONF_VEGET_FULL  )       { App::gfx_vegetation_mode.SetActive(GfxVegetation::FULL);    return true; }
+    return true;
 }
 
-int Settings::generateBinaryHash()
+inline bool CheckSimGearboxMode(std::string const & key, std::string const & s)
 {
-#ifndef NOOGRE
-	char program_path[1024]="";
-#if OGRE_PLATFORM == OGRE_PLATFORM_WIN32
-	// note: we enforce usage of the non-UNICODE interfaces (since its easier to integrate here)
-	if (!GetModuleFileNameA(NULL, program_path, 512))
-	{
-		ErrorUtils::ShowError(_L("Startup error"), _L("Error while retrieving program space path"));
-		return 1;
-	}
-	GetShortPathNameA(program_path, program_path, 512); //this is legal
+    if (key != App::sim_gearbox_mode.conf_name)
+        return false;
 
-#elif OGRE_PLATFORM == OGRE_PLATFORM_LINUX
-	//true program path is impossible to get from POSIX functions
-	//lets hack!
-	pid_t pid = getpid();
-	char procpath[256];
-	sprintf(procpath, "/proc/%d/exe", pid);
-	int ch = readlink(procpath,program_path,240);
-	if (ch != -1)
-	{
-		program_path[ch] = 0;
-	} else return 1;
-#elif OGRE_PLATFORM == OGRE_PLATFORM_APPLE
-	// TO BE DONE
-#endif //OGRE_PLATFORM
-	// now hash ourself
-	{
-		char hash_result[250];
-		memset(hash_result, 0, 249);
-		RoR::CSHA1 sha1;
-		sha1.HashFile(program_path);
-		sha1.Final();
-		sha1.ReportHash(hash_result, RoR::CSHA1::REPORT_HEX_SHORT);
-		setSetting("BinaryHash", String(hash_result));
-	}
-#endif //NOOGRE
-	return 0;
+    if (s == CONF_GEARBOX_AUTO      ) { App::sim_gearbox_mode.SetActive(SimGearboxMode::AUTO         ); return true; }
+    if (s == CONF_GEARBOX_SEMIAUTO  ) { App::sim_gearbox_mode.SetActive(SimGearboxMode::SEMI_AUTO    ); return true; }
+    if (s == CONF_GEARBOX_MANUAL    ) { App::sim_gearbox_mode.SetActive(SimGearboxMode::MANUAL       ); return true; }
+    if (s == CONF_GEARBOX_MAN_STICK ) { App::sim_gearbox_mode.SetActive(SimGearboxMode::MANUAL_STICK ); return true; }
+    if (s == CONF_GEARBOX_MAN_RANGES) { App::sim_gearbox_mode.SetActive(SimGearboxMode::MANUAL_RANGES); return true; }
+    return true;
 }
 
-bool Settings::get_system_paths(char *program_path, char *user_path)
+inline bool CheckGfxFlaresMode(std::string const & key, std::string const & s)
 {
-#if OGRE_PLATFORM == OGRE_PLATFORM_WIN32
-	// note: we enforce usage of the non-UNICODE interfaces (since its easier to integrate here)
-	if (!GetModuleFileNameA(NULL, program_path, 512))
-	{
-		ErrorUtils::ShowError(_L("Startup error"), _L("Error while retrieving program space path"));
-		return false;
-	}
-	GetShortPathNameA(program_path, program_path, 512); //this is legal
-	path_descend(program_path);
+    if (key != App::gfx_flares_mode.conf_name)
+        return false;
 
-	if (getSetting("userpath", "").empty())
-	{
-		if (SHGetFolderPathA(NULL, CSIDL_PERSONAL, NULL, SHGFP_TYPE_CURRENT, user_path)!=S_OK)
-		{
-			ErrorUtils::ShowError(_L("Startup error"), _L("Error while retrieving user space path"));
-			return false;
-		}
-		GetShortPathNameA(user_path, user_path, 512); //this is legal
-		sprintf(user_path, "%s\\Rigs of Rods %s\\", user_path, ROR_VERSION_STRING_SHORT); // do not use the full string, as same minor versions should share this directory
-	} else
-	{
-		strcpy(user_path, getSetting("userpath", "").c_str());
-	}
+    if (s == CONF_FLARES_NONE      )  { App::gfx_flares_mode.SetActive(GfxFlaresMode::NONE);                    return true; }
+    if (s == CONF_FLARES_NO_LIGHT  )  { App::gfx_flares_mode.SetActive(GfxFlaresMode::NO_LIGHTSOURCES);         return true; }
+    if (s == CONF_FLARES_CURR_HEAD )  { App::gfx_flares_mode.SetActive(GfxFlaresMode::CURR_VEHICLE_HEAD_ONLY);  return true; }
+    if (s == CONF_FLARES_ALL_HEADS )  { App::gfx_flares_mode.SetActive(GfxFlaresMode::ALL_VEHICLES_HEAD_ONLY);  return true; }
+    if (s == CONF_FLARES_ALL_LIGHTS)  { App::gfx_flares_mode.SetActive(GfxFlaresMode::ALL_VEHICLES_ALL_LIGHTS); return true; }
+    return true;
+}
 
-#elif OGRE_PLATFORM == OGRE_PLATFORM_LINUX
-	//true program path is impossible to get from POSIX functions
-	//lets hack!
-	pid_t pid = getpid();
-	char procpath[256];
-	sprintf(procpath, "/proc/%d/exe", pid);
-	int ch = readlink(procpath,program_path,240);
-	if (ch != -1)
-	{
-		program_path[ch] = 0;
-		path_descend(program_path);
-	} else return false;
-	//user path is easy
-	char home_path[256];
-	strncpy(home_path, getenv ("HOME"), 240);
-	//sprintf(user_path, "%s/RigsOfRods/", home_path); // old version
-	sprintf(user_path, "%s/.rigsofrods/", home_path);
-#elif OGRE_PLATFORM == OGRE_PLATFORM_APPLE
-	//found this code, will look later
-	String path = "./";
-	ProcessSerialNumber PSN;
-	ProcessInfoRec pinfo;
-	FSSpec pspec;
-	FSRef fsr;
-	OSStatus err;
-	/* set up process serial number */
-	PSN.highLongOfPSN = 0;
-	PSN.lowLongOfPSN = kCurrentProcess;
-	/* set up info block */
-	pinfo.processInfoLength = sizeof(pinfo);
-	pinfo.processName = NULL;
-	pinfo.processAppSpec = &pspec;
-	/* grab the vrefnum and directory */
-	
-	//path = "~/RigsOfRods/";
-	//strcpy(user_path, path.c_str());
-	
-	err = GetProcessInformation(&PSN, &pinfo);
-	if (! err ) {
-		char c_path[2048];
-		FSSpec fss2;
-		int tocopy;
-		err = FSMakeFSSpec(pspec.vRefNum, pspec.parID, 0, &fss2);
-		if ( ! err ) {
-			err = FSpMakeFSRef(&fss2, &fsr);
-			if ( ! err ) {
-				err = (OSErr)FSRefMakePath(&fsr, (UInt8*)c_path, 2048);
-				if (! err ) {
-					path = c_path;
-					path += "/";
-					strcpy(program_path, path.c_str());
-				}
-				
-				err = FSFindFolder(kOnAppropriateDisk, kDocumentsFolderType, kDontCreateFolder, &fsr);
-				if (! err ) {
-					FSRefMakePath(&fsr, (UInt8*)c_path, 2048);
-					if (! err ) {
-						path = c_path;
-						path += "/Rigs\ of\ Rods/";
-						strcpy(user_path, path.c_str());
-					}
-				}
-			}
-		}
-	}
+inline bool CheckGfxWaterMode(std::string const & key, std::string const & s)
+{
+    if (key != App::gfx_water_mode.conf_name)
+        return false;
+
+    if (s == CONF_WATER_NONE     )    { App::gfx_water_mode.SetActive(GfxWaterMode::NONE     ); return true; }
+    if (s == CONF_WATER_BASIC    )    { App::gfx_water_mode.SetActive(GfxWaterMode::BASIC    ); return true; }
+    if (s == CONF_WATER_REFLECT  )    { App::gfx_water_mode.SetActive(GfxWaterMode::REFLECT  ); return true; }
+    if (s == CONF_WATER_FULL_FAST)    { App::gfx_water_mode.SetActive(GfxWaterMode::FULL_FAST); return true; }
+    if (s == CONF_WATER_FULL_HQ  )    { App::gfx_water_mode.SetActive(GfxWaterMode::FULL_HQ  ); return true; }
+    if (s == CONF_WATER_HYDRAX   )    { App::gfx_water_mode.SetActive(GfxWaterMode::HYDRAX   ); return true; }
+    return true;
+}
+
+inline bool CheckGfxSkyMode(std::string const & key, std::string const & s)
+{
+    if (key != App::gfx_sky_mode.conf_name)
+        return false;
+
+    if (s == CONF_SKY_SANDSTORM)      { App::gfx_sky_mode.SetActive(GfxSkyMode::SANDSTORM); return true; }
+    if (s == CONF_SKY_CAELUM   )      { App::gfx_sky_mode.SetActive(GfxSkyMode::CAELUM);    return true; }
+    if (s == CONF_SKY_SKYX     )      { App::gfx_sky_mode.SetActive(GfxSkyMode::SKYX);      return true; }
+    return true;
+}
+
+inline bool CheckScreenshotFormat(std::string const & key, std::string const & s)
+{
+    if (key != App::app_screenshot_format.conf_name)
+        return false;
+
+    if (s.size() >= 3) { App::app_screenshot_format.SetActive(s.substr(0, 3).c_str()); }
+    return true;
+}
+
+inline bool CheckEnvmapRate(std::string const & key, std::string const & s)
+{
+    if (key != App::gfx_envmap_rate.conf_name)
+        return false;
+
+    int rate = Ogre::StringConverter::parseInt(s);
+    if (rate < 0) { rate = 0; }
+    if (rate > 6) { rate = 6; }
+    App::gfx_envmap_rate.SetActive(rate);
+    return true;
+}
+
+template <typename GVarStr_T>
+inline bool CheckStr(GVarStr_T& gvar, std::string const & key, std::string const & value)
+{
+    if (key == gvar.conf_name)
+    {
+        gvar.SetActive(value.c_str());
+        return true;
+    }
+    return false;
+}
+
+template <typename GVarStr_T>
+inline bool CheckStrAS(GVarStr_T& gvar, std::string const & key, std::string const & value)
+{
+    if (key == gvar.conf_name)
+    {
+        gvar.SetActive(value.c_str());
+        gvar.SetStored(value.c_str());
+        return true;
+    }
+    return false;
+}
+
+inline bool CheckInt(GVarPod_A<int>& gvar, std::string const & key, std::string const & value)
+{
+    if (key == gvar.conf_name)
+    {
+        gvar.SetActive(Ogre::StringConverter::parseInt(value));
+        return true;
+    }
+    return false;
+}
+
+inline bool CheckInt(GVarPod_APS<int>& gvar, std::string const & key, std::string const & value)
+{
+    if (key == gvar.conf_name)
+    {
+        int val = Ogre::StringConverter::parseInt(value);
+        gvar.SetActive(val);
+        gvar.SetStored(val);
+        return true;
+    }
+    return false;
+}
+
+inline bool CheckBool(GVarPod_A<bool>& gvar, std::string const & key, std::string const & value)
+{
+    if (key == gvar.conf_name)
+    {
+        gvar.SetActive(Ogre::StringConverter::parseBool(value));
+        return true;
+    }
+    return false;
+}
+
+inline bool CheckBool(GVarPod_APS<bool>& gvar, std::string const & key, std::string const & value)
+{
+    if (key == gvar.conf_name)
+    {
+        bool val = Ogre::StringConverter::parseBool(value);
+        gvar.SetActive(val);
+        gvar.SetStored(val);
+        return true;
+    }
+    return false;
+}
+
+inline bool CheckB2I(GVarPod_A<int>& gvar, std::string const & key, std::string const & value) // bool to int
+{
+    if (key == gvar.conf_name)
+    {
+        gvar.SetActive(Ogre::StringConverter::parseBool(value) ? 1 : 0);
+        return true;
+    }
+    return false;
+}
+
+inline bool CheckFloat(GVarPod_A<float>& gvar, std::string const & key, std::string const & value)
+{
+    if (key == gvar.conf_name)
+    {
+        gvar.SetActive(static_cast<float>(Ogre::StringConverter::parseReal(value)));
+        return true;
+    }
+    return false;
+}
+
+inline bool CheckFloat(GVarPod_APS<float>& gvar, std::string const & key, std::string const & value)
+{
+    if (key == gvar.conf_name)
+    {
+        float val = static_cast<float>(Ogre::StringConverter::parseReal(value));
+        gvar.SetActive(val);
+        gvar.SetStored(val);
+        return true;
+    }
+    return false;
+}
+
+inline bool CheckSpeedoImperial(std::string const & key, std::string const & value)
+{
+    if (key == "SpeedUnit") // String ["Metric"/"Imperial"], decommissioned 10/2017
+    {
+        App::gfx_speedo_imperial.SetActive(value == "Imperial");
+        return true;
+    }
+    return CheckBool(App::gfx_speedo_imperial, key, value);
+}
+inline bool CheckFOV(GVarPod_APS<float>& gvar, std::string const & key, std::string const & value)
+{
+    if (key == gvar.conf_name)
+    {
+        float val = static_cast<float>(Ogre::StringConverter::parseReal (value));
+
+        // FOV shouldn't be below 10
+        if(val < 10) return false;
+
+        gvar.SetActive (val);
+        gvar.SetStored (val);
+        return true;
+    }
+    return false;
+}
+
+bool Settings::ParseGlobalVarSetting(std::string const & k, std::string const & v)
+{
+    // Process and erase settings which propagate to global vars.
+
+    // Multiplayer
+    if (CheckBool (App::mp_join_on_startup,        k, v)) { return true; }
+    if (CheckStr  (App::mp_player_name,            k, v)) { return true; }
+    if (CheckStr  (App::mp_server_host,            k, v)) { return true; }
+    if (CheckInt  (App::mp_server_port,            k, v)) { return true; }
+    if (CheckStr  (App::mp_server_password,        k, v)) { return true; }
+    if (CheckStr  (App::mp_portal_url,             k, v)) { return true; }
+    if (CheckStr  (App::mp_player_token_hash,      k, v)) { return true; }
+    // App
+    if (CheckScreenshotFormat                     (k, v)) { return true; }
+    if (CheckStr  (App::app_locale,                k, v)) { return true; }
+    if (CheckBool (App::app_multithread,           k, v)) { return true; }
+    // Input&Output
+    if (CheckBool (App::io_ffb_enabled,            k, v)) { return true; }
+    if (CheckFloat(App::io_ffb_camera_gain,        k, v)) { return true; }
+    if (CheckFloat(App::io_ffb_center_gain,        k, v)) { return true; }
+    if (CheckFloat(App::io_ffb_master_gain,        k, v)) { return true; }
+    if (CheckFloat(App::io_ffb_stress_gain,        k, v)) { return true; }
+    if (CheckBool (App::io_arcade_controls,        k, v)) { return true; }
+    if (CheckInt  (App::io_outgauge_mode,          k, v)) { return true; }
+    if (CheckStr  (App::io_outgauge_ip,            k, v)) { return true; }
+    if (CheckInt  (App::io_outgauge_port,          k, v)) { return true; }
+    if (CheckFloat(App::io_outgauge_delay,         k, v)) { return true; }
+    if (CheckInt  (App::io_outgauge_id,            k, v)) { return true; }
+    if (CheckIoInputGrabMode                      (k, v)) { return true; }
+    // Gfx
+    if (CheckEnvmapRate                           (k, v)) { return true; }
+    if (CheckShadowTech                           (k, v)) { return true; }
+    if (CheckExtcamMode                           (k, v)) { return true; }
+    if (CheckTexFiltering                         (k, v)) { return true; }
+    if (CheckVegetationMode                       (k, v)) { return true; }
+    if (CheckGfxFlaresMode                        (k, v)) { return true; }
+    if (CheckGfxWaterMode                         (k, v)) { return true; }
+    if (CheckGfxSkyMode                           (k, v)) { return true; }
+    if (CheckSpeedoImperial                       (k, v)) { return true; }
+    if (CheckBool (App::gfx_enable_sunburn,        k, v)) { return true; }
+    if (CheckBool (App::gfx_water_waves,           k, v)) { return true; }
+    if (CheckBool (App::gfx_minimap_disabled,      k, v)) { return true; }
+    if (CheckB2I  (App::gfx_particles_mode,        k, v)) { return true; }
+    if (CheckBool (App::gfx_enable_glow,           k, v)) { return true; }
+    if (CheckBool (App::gfx_enable_hdr,            k, v)) { return true; }
+    if (CheckBool (App::gfx_enable_dof,            k, v)) { return true; }
+    if (CheckBool (App::gfx_enable_heathaze,       k, v)) { return true; }
+    if (CheckBool (App::gfx_enable_videocams,      k, v)) { return true; }
+    if (CheckB2I  (App::gfx_skidmarks_mode,        k, v)) { return true; }
+    if (CheckBool (App::gfx_envmap_enabled,        k, v)) { return true; }
+    if (CheckFloat(App::gfx_sight_range,           k, v)) { return true; }
+    if (CheckFOV  (App::gfx_fov_external,          k, v)) { return true; }
+    if (CheckFOV  (App::gfx_fov_internal,          k, v)) { return true; }
+    if (CheckInt  (App::gfx_fps_limit,             k, v)) { return true; }
+    if (CheckBool (App::gfx_minimap_disabled,      k, v)) { return true; }
+    if (CheckBool (App::gfx_speedo_digital,        k, v)) { return true; }
+    if (CheckBool (App::gfx_motion_blur,           k, v)) { return true; }
+    // Audio
+    if (CheckFloat(App::audio_master_volume,       k, v)) { return true; }
+    if (CheckBool (App::audio_enable_creak,        k, v)) { return true; }
+    if (CheckBool (App::audio_menu_music,          k, v)) { return true; }
+    if (CheckStr  (App::audio_device_name,         k, v)) { return true; }
+    // Diag
+    if (CheckBool (App::diag_rig_log_node_import,  k, v)) { return true; }
+    if (CheckBool (App::diag_rig_log_node_stats,   k, v)) { return true; }
+    if (CheckBool (App::diag_rig_log_messages,     k, v)) { return true; }
+    if (CheckBool (App::diag_collisions,           k, v)) { return true; }
+    if (CheckBool (App::diag_truck_mass,           k, v)) { return true; }
+    if (CheckBool (App::diag_envmap,               k, v)) { return true; }
+    if (CheckBool (App::diag_videocameras,         k, v)) { return true; }
+    if (CheckBool (App::diag_log_console_echo,     k, v)) { return true; }
+    if (CheckBool (App::diag_log_beam_break,       k, v)) { return true; }
+    if (CheckBool (App::diag_log_beam_deform,      k, v)) { return true; }
+    if (CheckBool (App::diag_log_beam_trigger,     k, v)) { return true; }
+    if (CheckBool (App::diag_dof_effect,           k, v)) { return true; }
+    if (CheckStrAS(App::diag_preset_terrain,       k, v)) { return true; }
+    if (CheckStr  (App::diag_preset_vehicle,       k, v)) { return true; }
+    if (CheckStr  (App::diag_preset_veh_config,    k, v)) { return true; }
+    if (CheckBool (App::diag_preset_veh_enter,     k, v)) { return true; }
+    if (CheckStr  (App::diag_extra_resource_dir,   k, v)) { return true; }
+    // Sim
+    if (CheckSimGearboxMode                       (k, v)) { return true; }
+    if (CheckBool (App::sim_replay_enabled,        k, v)) { return true; }
+    if (CheckInt  (App::sim_replay_length,         k, v)) { return true; }
+    if (CheckInt  (App::sim_replay_stepping,       k, v)) { return true; }
+    if (CheckBool (App::sim_position_storage,      k, v)) { return true; }
+    if (CheckBool (App::sim_hires_wheel_col,       k, v)) { return true; }
+
+    return false;
+}
+
+void Settings::LoadRoRCfg()
+{
+    Ogre::ConfigFile cfg;
+    try
+    {
+        Str<300> path;
+        path << App::sys_config_dir.GetActive() << PATH_SLASH << "RoR.cfg";
+        cfg.load(Ogre::String(path), "=:\t", false);
+
+        // load all settings into a map!
+        Ogre::ConfigFile::SettingsIterator i = cfg.getSettingsIterator();
+        String s_value, s_name;
+        while (i.hasMoreElements())
+        {
+            s_name  = RoR::Utils::SanitizeUtf8String(i.peekNextKey());
+            s_value = RoR::Utils::SanitizeUtf8String(i.getNext());
+
+            // Purge unwanted entries
+            if (s_name == "Program Path") { continue; }
+
+            // Process and clear GVar values
+            if (this->ParseGlobalVarSetting(s_name, s_value))
+            {
+                continue;
+            }
+
+            settings[s_name] = s_value;
+        }
+    }
+    catch (Ogre::FileNotFoundException&) {} // Just continue with defaults...
+}
+
+// --------------------------- WRITING CONFIG FILE ------------------------------- //
+
+inline const char* IoInputGrabToStr(IoInputGrabMode v)
+{
+    switch (v)
+    {
+    case IoInputGrabMode::DYNAMIC: return CONF_INPUT_GRAB_DYNAMIC;
+    case IoInputGrabMode::NONE   : return CONF_INPUT_GRAB_NONE;
+    case IoInputGrabMode::ALL    : return CONF_INPUT_GRAB_ALL;
+    default                      : return "";
+    }
+}
+
+inline const char* GfxShadowTechToStr(GfxShadowType v)
+{
+    switch (v)
+    {
+    case GfxShadowType::TEXTURE: return CONF_GFX_SHADOW_TEX;
+    case GfxShadowType::PSSM   : return CONF_GFX_SHADOW_PSSM;
+    case GfxShadowType::NONE   : return CONF_GFX_SHADOW_NONE;
+    default                    : return "";
+    }
+}
+
+inline const char* GfxExtcamModeToStr(GfxExtCamMode v)
+{
+    switch (v)
+    {
+    case GfxExtCamMode::PITCHING: return CONF_EXTCAM_PITCHING;
+    case GfxExtCamMode::STATIC  : return CONF_EXTCAM_STATIC;
+    case GfxExtCamMode::NONE    : return CONF_EXTCAM_NONE;
+    default                     : return "";
+    }
+}
+
+inline const char* GfxTexFilterToStr(GfxTexFilter v)
+{
+    switch (v)
+    {
+    case GfxTexFilter::NONE       : return CONF_TEXFILTER_NONE;
+    case GfxTexFilter::BILINEAR   : return CONF_TEXFILTER_BILI;
+    case GfxTexFilter::TRILINEAR  : return CONF_TEXFILTER_TRILI;
+    case GfxTexFilter::ANISOTROPIC: return CONF_TEXFILTER_ANISO;
+    default                       : return "";
+    }
+}
+
+inline const char* GfxVegetationToStr(GfxVegetation v)
+{
+    switch (v)
+    {
+    case GfxVegetation::NONE   : return CONF_VEGET_NONE;
+    case GfxVegetation::x20PERC: return CONF_VEGET_20PERC;
+    case GfxVegetation::x50PERC: return CONF_VEGET_50PERC;
+    case GfxVegetation::FULL   : return CONF_VEGET_FULL;
+    default                    : return "";
+    }
+}
+
+inline const char* SimGearboxToStr(SimGearboxMode v)
+{
+    switch (v)
+    {
+    case SimGearboxMode::AUTO         : return CONF_GEARBOX_AUTO;
+    case SimGearboxMode::SEMI_AUTO    : return CONF_GEARBOX_SEMIAUTO;
+    case SimGearboxMode::MANUAL       : return CONF_GEARBOX_MANUAL;
+    case SimGearboxMode::MANUAL_STICK : return CONF_GEARBOX_MAN_STICK;
+    case SimGearboxMode::MANUAL_RANGES: return CONF_GEARBOX_MAN_RANGES;
+    default                           : return "";
+    }
+}
+
+inline const char* GfxFlaresToStr(GfxFlaresMode v)
+{
+    switch(v)
+    {
+    case GfxFlaresMode::NONE                   : return CONF_FLARES_NONE;
+    case GfxFlaresMode::NO_LIGHTSOURCES        : return CONF_FLARES_NO_LIGHT;
+    case GfxFlaresMode::CURR_VEHICLE_HEAD_ONLY : return CONF_FLARES_CURR_HEAD;
+    case GfxFlaresMode::ALL_VEHICLES_HEAD_ONLY : return CONF_FLARES_ALL_HEADS;
+    case GfxFlaresMode::ALL_VEHICLES_ALL_LIGHTS: return CONF_FLARES_ALL_LIGHTS;
+    default                                    : return "";
+    }
+}
+
+inline const char* GfxWaterToStr(GfxWaterMode v)
+{
+    switch(v)
+    {
+    case GfxWaterMode::BASIC    : return CONF_WATER_BASIC;
+    case GfxWaterMode::REFLECT  : return CONF_WATER_REFLECT;
+    case GfxWaterMode::FULL_FAST: return CONF_WATER_FULL_FAST;
+    case GfxWaterMode::FULL_HQ  : return CONF_WATER_FULL_HQ;
+    case GfxWaterMode::HYDRAX   : return CONF_WATER_HYDRAX;
+    default                     : return "";
+    }
+}
+
+inline const char* GfxSkyToStr(GfxSkyMode v)
+{
+    switch(v)
+    {
+    case GfxSkyMode::CAELUM   : return CONF_SKY_CAELUM;
+    case GfxSkyMode::SKYX     : return CONF_SKY_SKYX;
+    case GfxSkyMode::SANDSTORM: return CONF_SKY_SANDSTORM;
+    default                   : return "";
+    }
+}
+
+template <typename GVarStr_T>
+inline void WriteStr(std::ofstream& f, GVarStr_T& gvar)
+{
+    f << gvar.conf_name << "=" << gvar.GetStored() << std::endl;
+}
+
+template <typename T>
+inline void WritePod(std::ofstream& f, GVarPod_A<T>& gvar)
+{
+    f << gvar.conf_name << "=" << gvar.GetActive() << std::endl;
+}
+
+template <typename T>
+inline void WritePod(std::ofstream& f, GVarPod_APS<T>& gvar)
+{
+    f << gvar.conf_name << "=" << gvar.GetStored() << std::endl;
+}
+
+template <typename GVarPod_T>
+inline void WriteYN(std::ofstream& f, GVarPod_T& gvar) ///< Writes "Yes/No" - handles `bool` and `int(1/0)`
+{
+    f << gvar.conf_name << "=" << (static_cast<int>(gvar.GetActive()) == 0 ? "No" : "Yes") << std::endl;
+}
+
+inline void WriteAny(std::ofstream& f, const char* name, const char* value)
+{
+    f << name << "=" << value << std::endl;
+}
+
+void Settings::SaveSettings()
+{
+    Str<300> rorcfg_path;
+    rorcfg_path << App::sys_config_dir.GetActive() << PATH_SLASH << "RoR.cfg";
+    std::ofstream f(rorcfg_path);
+    if (!f.is_open())
+    {
+        LOG("[RoR] Failed to save RoR.cfg: Could not open file");
+        return;
+    }
+
+    f << "; Rigs of Rods configuration file" << std::endl;
+    f << "; -------------------------------" << std::endl;
+
+    f << std::endl << "; Multiplayer" << std::endl;
+    WriteYN  (f, App::mp_join_on_startup);
+    WriteStr (f, App::mp_player_name);
+    WriteStr (f, App::mp_server_host);
+    WritePod (f, App::mp_server_port);
+    WriteStr (f, App::mp_server_password);
+    WriteStr (f, App::mp_portal_url);
+
+    f << std::endl << "; Simulation" << std::endl;
+    WriteAny (f, App::sim_gearbox_mode.conf_name, SimGearboxToStr(App::sim_gearbox_mode.GetActive()));
+    WriteYN  (f, App::sim_replay_enabled    );
+    WritePod (f, App::sim_replay_length     );
+    WritePod (f, App::sim_replay_stepping   );
+    WriteYN  (f, App::sim_position_storage  );
+    WriteYN  (f, App::sim_hires_wheel_col   );
+
+    f << std::endl << "; Input/Output" << std::endl;
+    WriteAny (f, App::io_input_grab_mode.conf_name, IoInputGrabToStr(App::io_input_grab_mode.GetActive()));
+    WriteYN  (f, App::io_ffb_enabled);
+    WritePod (f, App::io_ffb_camera_gain);
+    WritePod (f, App::io_ffb_center_gain);
+    WritePod (f, App::io_ffb_master_gain);
+    WritePod (f, App::io_ffb_stress_gain);
+    WriteYN  (f, App::io_arcade_controls);
+    WritePod (f, App::io_outgauge_mode);
+    WriteStr (f, App::io_outgauge_ip);
+    WritePod (f, App::io_outgauge_port);
+    WritePod (f, App::io_outgauge_delay);
+    WritePod (f, App::io_outgauge_id);
+
+    f << std::endl << "; Graphics" << std::endl;
+    WriteAny (f, App::gfx_shadow_type.conf_name    , GfxShadowTechToStr(App::gfx_shadow_type.GetActive     ()));
+    WriteAny (f, App::gfx_extcam_mode.conf_name    , GfxExtcamModeToStr(App::gfx_extcam_mode.GetActive     ()));
+    WriteAny (f, App::gfx_texture_filter.conf_name , GfxTexFilterToStr (App::gfx_texture_filter.GetActive  ()));
+    WriteAny (f, App::gfx_vegetation_mode.conf_name, GfxVegetationToStr(App::gfx_vegetation_mode.GetActive ()));
+    WriteAny (f, App::gfx_flares_mode.conf_name    , GfxFlaresToStr    (App::gfx_flares_mode.GetActive     ()));
+    WriteAny (f, App::gfx_water_mode.conf_name     , GfxWaterToStr     (App::gfx_water_mode.GetActive      ()));
+    WriteAny (f, App::gfx_sky_mode.conf_name       , GfxSkyToStr       (App::gfx_sky_mode.GetActive        ()));
+    WriteYN  (f, App::gfx_enable_sunburn  );
+    WriteYN  (f, App::gfx_enable_videocams);
+    WriteYN  (f, App::gfx_water_waves     );
+    WriteYN  (f, App::gfx_minimap_disabled);
+    WriteYN  (f, App::gfx_particles_mode  );
+    WriteYN  (f, App::gfx_enable_glow     );
+    WriteYN  (f, App::gfx_enable_hdr      );
+    WriteYN  (f, App::gfx_enable_dof      );
+    WriteYN  (f, App::gfx_enable_heathaze );
+    WriteYN  (f, App::gfx_skidmarks_mode  );
+    WriteYN  (f, App::gfx_speedo_digital  );
+    WriteYN  (f, App::gfx_speedo_imperial );
+    WriteYN  (f, App::gfx_motion_blur     );
+    WriteYN  (f, App::gfx_envmap_enabled  );
+    WritePod (f, App::gfx_envmap_rate     );
+    WritePod (f, App::gfx_sight_range     );
+    WritePod (f, App::gfx_fps_limit       );
+    WritePod (f, App::gfx_fov_external    );
+    WritePod (f, App::gfx_fov_internal    );
+
+    f << std::endl << "; Audio" << std::endl;
+    WritePod (f, App::audio_master_volume);
+    WriteYN  (f, App::audio_enable_creak );
+    WriteYN  (f, App::audio_menu_music   );
+    WriteStr (f, App::audio_device_name  );
+
+    f << std::endl << "; Diagnostics" << std::endl;
+    WriteYN  (f, App::diag_rig_log_node_import);
+    WriteYN  (f, App::diag_rig_log_node_stats );
+    WriteYN  (f, App::diag_rig_log_messages   );
+    WriteYN  (f, App::diag_collisions         );
+    WriteYN  (f, App::diag_truck_mass         );
+    WriteYN  (f, App::diag_envmap             );
+    WriteYN  (f, App::diag_log_console_echo   );
+    WriteYN  (f, App::diag_log_beam_break     );
+    WriteYN  (f, App::diag_log_beam_deform    );
+    WriteYN  (f, App::diag_log_beam_trigger   );
+    WriteYN  (f, App::diag_dof_effect         );
+    WriteYN  (f, App::diag_preset_veh_enter   );
+    WriteStr (f, App::diag_preset_terrain     );
+    WriteStr (f, App::diag_preset_vehicle     );
+    WriteStr (f, App::diag_preset_veh_config  );
+    WriteYN  (f, App::diag_videocameras       );
+
+    f << std::endl << "; Application"<< std::endl;
+    WriteStr (f, App::app_screenshot_format );
+    WriteStr (f, App::app_locale            );
+    WriteYN  (f, App::app_multithread       );
+
+    // Append misc legacy entries
+    f << std::endl << "; Misc" << std::endl;
+    for (auto itor = settings.begin(); itor != settings.end(); ++itor)
+    {
+        f << itor->first << "=" << itor->second << std::endl;
+    }
+
+    f.close();
+}
+
+bool Settings::SetupAllPaths()
+{
+    using namespace RoR;
+    Str<300> buf;
+
+    // User directories
+    buf.Clear() << App::sys_user_dir.GetActive() << PATH_SLASH << "config";             App::sys_config_dir    .SetActive(buf);
+    buf.Clear() << App::sys_user_dir.GetActive() << PATH_SLASH << "cache";              App::sys_cache_dir     .SetActive(buf);
+    buf.Clear() << App::sys_user_dir.GetActive() << PATH_SLASH << "screenshots";        App::sys_screenshot_dir.SetActive(buf);
+
+    // Resources dir
+    buf.Clear() << App::sys_process_dir.GetActive() << PATH_SLASH << "resources";
+    if (FolderExists(buf))
+    {
+        App::sys_resources_dir.SetActive(buf);
+        return true;
+    }
+
+#if OGRE_PLATFORM == OGRE_PLATFORM_LINUX
+    buf = "/usr/share/rigsofrods/resources/";
+    if (FolderExists(buf))
+    {
+        App::sys_resources_dir.SetActive(buf);
+        return true;
+    }
 #endif
-	return true;
-}
 
-bool Settings::setupPaths()
-{
-	char program_path[1024] = {};
-	char resources_path[1024] = {};
-	//char streams_path[1024] = {};
-	char user_path[1024] = {};
-	char config_root[1024] = {};
-#if OGRE_PLATFORM == OGRE_PLATFORM_WIN32
-	const char *dsStr = "\\";
-#else
-	const char *dsStr="/";
-#endif
+    buf = RoR::GetParentDirectory(App::sys_process_dir.GetActive());
 
-	if (!get_system_paths(program_path, user_path))
-		return false;
-
-	String local_config = String(program_path) + String(dsStr) + String("config");
-	if (FolderExists(local_config.c_str()))
-	{
-		sprintf(user_path, "%s%sconfig%s",program_path, dsStr, dsStr);
-	}
-
-	// check for resource folder: first the normal version (in the executables directory)
-	strcpy(resources_path, program_path);
-	path_add(resources_path, "resources");
-	if (! FolderExists(resources_path))
-	{
-		// if not existing: check one dir up (dev version)
-		strcpy(resources_path, program_path);
-		path_descend(resources_path);
-		path_add(resources_path, "resources");
-		if (! FolderExists(resources_path))
-		{
-			// 3rd fallback: check the installation path
-#ifndef _WIN32
-			// linux fallback
-			// TODO: use installation patch values from CMake
-			strcpy(resources_path, "/usr/share/rigsofrods/resources/");
-#endif // !_WIN32
-
-			if (! FolderExists(resources_path))
-			{
-				ErrorUtils::ShowError(_L("Startup error"), _L("Resources folder not found. Check if correctly installed."));
-				exit(1);
-			}
-		}
-	}
-
-	// change working directory to executable path
-#ifdef _WIN32
-	_chdir(program_path);
-#endif // _WIN32
-
-	//setup config files names
-	char plugins_fname[1024] = {};
-
-#ifdef _WIN32
-	// under windows, the plugins.cfg is in the installation directory
-	strcpy(plugins_fname, program_path);
-#else
-	// under linux, the plugins.cfg is somewhere in /usr/share/rigsofrods/resources
-	// we will test both locations: program and resource path
-	char tmppp[1024] = "";
-	strcpy(tmppp, resources_path);	
-	strcat(tmppp, "plugins.cfg");
-	if(FileExists(tmppp))
-	{
-		strcpy(plugins_fname, resources_path);
-	} else
-	{
-		strcpy(tmppp, program_path);	
-		strcat(tmppp, "plugins.cfg");
-		if(FileExists(tmppp))
-			strcpy(plugins_fname, program_path);
-	}
-	
-#endif // _WIN32
-
-
-#ifdef _DEBUG
-	strcat(plugins_fname, "plugins_d.cfg");
-#else
-	strcat(plugins_fname, "plugins.cfg");
-#endif
-
-	char ogreconf_fname[1024] = {};
-	strcpy(ogreconf_fname, user_path);
-	path_add(ogreconf_fname, "config");
-	strcpy(config_root, ogreconf_fname); //setting the config root here
-	strcat(ogreconf_fname, "ogre.cfg");
-
-	char ogrelog_fname[1024] = {};
-	strcpy(ogrelog_fname, user_path);
-	path_add(ogrelog_fname, "logs");
-
-    settings["Log dir"] = ogrelog_fname;
-
-    char profiler_out_dir[1000];
-    strcpy(profiler_out_dir, user_path);
-    path_add(profiler_out_dir, "profiler");
-    settings["Profiler output dir"] = profiler_out_dir;
-
-	char ogrelog_path[1024] = {};
-	strcpy(ogrelog_path, ogrelog_fname);
-	strcat(ogrelog_fname, "RoR.log");
-
-	// now update our settings with the results:
-
-	settings["dirsep"] = String(dsStr);
-	settings["Config Root"] = String(config_root);
-	settings["CachePath"] = String(user_path) + "cache" + String(dsStr);
-
-	// only set log path if it was not set before
-	settings["Log Path"] = String(ogrelog_path);
-	settings["Resources Path"] = String(resources_path);
-	settings["User Path"] = String(user_path);
-	settings["Program Path"] = String(program_path);
-	settings["plugins.cfg"] = String(plugins_fname);
-	settings["ogre.cfg"] = String(ogreconf_fname);
-	settings["ogre.log"] = String(ogrelog_fname);
-
-#if OGRE_PLATFORM == OGRE_PLATFORM_WIN32
-	// XXX maybe use StringUtil::standardisePath here?
-	// windows is case insensitive, so norm here
-	StringUtil::toLowerCase(settings["Config Root"]);
-	StringUtil::toLowerCase(settings["Cache Path"]);
-	StringUtil::toLowerCase(settings["Log Path"]);
-	StringUtil::toLowerCase(settings["Resources Path"]);
-	StringUtil::toLowerCase(settings["Program Path"]);
-#endif
-	// now enable the user to override that:
-	if (FileExists("config.cfg"))
-	{
-		loadSettings("config.cfg", true);
-
-		// fix up time things...
-		settings["Config Root"] = settings["User Path"]+String(dsStr)+"config"+String(dsStr);
-		settings["Cache Path"]  = settings["User Path"]+String(dsStr)+"cache"+String(dsStr);
-		settings["Log Path"]    = settings["User Path"]+String(dsStr)+"logs"+String(dsStr);
-		settings["ogre.cfg"]    = settings["User Path"]+String(dsStr)+"config"+String(dsStr)+"ogre.cfg";
-		settings["ogre.log"]    = settings["User Path"]+String(dsStr)+"logs"+String(dsStr)+"RoR.log";
-	}
-
-	if (!settings["Enforce Log Path"].empty())
-	{
-		settings["Log Path"] = settings["Enforce Log Path"];
-		settings["ogre.log"] = settings["Log Path"]+String(dsStr)+"RoR.log";
-	}
-
-	printf(" * log path:         %s\n", settings["Log Path"].c_str());
-	printf(" * config path:      %s\n", settings["Config Root"].c_str());
-	printf(" * user path:        %s\n", settings["User Path"].c_str());
-	printf(" * program path:     %s\n", settings["Program Path"].c_str());
-	printf(" * used plugins.cfg: %s\n", settings["plugins.cfg"].c_str());
-	printf(" * used ogre.cfg:    %s\n", settings["ogre.cfg"].c_str());
-	printf(" * used ogre.log:    %s\n", settings["ogre.log"].c_str());
-
-	return true;
-}
-
-
-void Settings::path_descend(char* path)
-{
-	char dirsep='/';
-#if OGRE_PLATFORM == OGRE_PLATFORM_WIN32
-	dirsep='\\';
-#endif
-	char* pt=path+strlen(path)-1;
-	if (pt>=path && *pt==dirsep) pt--;
-	while (pt>=path && *pt!=dirsep) pt--;
-	if (pt>=path) *(pt+1)=0;
-}
-
-void Settings::path_add(char* path, const char* dirname)
-{
-	char tmp[1024];
-	char dirsep='/';
-#if OGRE_PLATFORM == OGRE_PLATFORM_WIN32
-	dirsep='\\';
-#endif
-	sprintf(tmp, "%s%s%c", path, dirname, dirsep);
-	strcpy(path, tmp);
-}
-
-int Settings::GetFlaresMode(int default_value /*=2*/)
-{
-	if (m_flares_mode == -1) // -1: unknown, -2: default, 0+: mode ID
-	{
-		auto itor = settings.find("Lights");
-		if (itor == settings.end())
-		{
-			m_flares_mode = -2;
-		}
-		else
-		{
-			if      (itor->second == "None (fastest)")                    { m_flares_mode = 0; }
-			else if (itor->second == "No light sources")                  { m_flares_mode = 1; }
-			else if (itor->second == "Only current vehicle, main lights") { m_flares_mode = 2; }
-			else if (itor->second == "All vehicles, main lights")         { m_flares_mode = 3; }
-			else if (itor->second == "All vehicles, all lights")          { m_flares_mode = 4; }
-
-			else                                                          { m_flares_mode = -2; }
-		}
-	}
-	if (m_flares_mode == -2)
-	{
-		return default_value;
-	}
-	return m_flares_mode;
-}
-
-int Settings::GetGearBoxMode(int default_value /*=0*/)
-{
-	if (m_gearbox_mode == -1) // -1: unknown, -2: default, 0+: mode ID
-	{
-		auto itor = settings.find("GearboxMode");
-		if (itor == settings.end())
-		{
-			m_gearbox_mode = -2;
-		}
-		else
-		{
-			if (itor->second == "Automatic shift")	{ m_gearbox_mode = 0; }
-			else if (itor->second == "Manual shift - Auto clutch")	{ m_gearbox_mode = 1; }
-			else if (itor->second == "Fully Manual: sequential shift")	{ m_gearbox_mode = 2; }
-			else if (itor->second == "Fully manual: stick shift")	{ m_gearbox_mode = 3; }
-			else if (itor->second == "Fully Manual: stick shift with ranges")	{ m_gearbox_mode = 4; }
-
-			else { m_gearbox_mode = -2; }
-		}
-	}
-	if (m_gearbox_mode == -2)
-	{
-		return default_value;
-	}
-	return m_gearbox_mode;
+    return false;
 }
